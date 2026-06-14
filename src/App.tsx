@@ -457,6 +457,42 @@ export default function App() {
     setAiReport("");
   };
 
+  // --- BULK SIMULATION COMMANDS FOR ADMINE/TEACHER IMPROVEMENT SCOPE ---
+  const handleBulkToggleFailing = () => {
+    const failingStudentIds = Array.from(new Set(actionablePlan.subjectiveFailings.map(f => f.student.id)));
+    const combined = Array.from(new Set([...coachedStudentIds, ...failingStudentIds]));
+    setCoachedStudentIds(combined);
+    setAiReport("");
+  };
+
+  const handleBulkToggleNearToppers = () => {
+    const potIds = actionablePlan.subjectiveTopperPotentials.map(p => p.student.id);
+    const combined = Array.from(new Set([...coachedStudentIds, ...potIds]));
+    setCoachedStudentIds(combined);
+    setAiReport("");
+  };
+
+  const handleBulkToggleIoqm = () => {
+    const ioqmIds = actionablePlan.ioqmItems.map(i => i.student.id);
+    const combined = Array.from(new Set([...coachedStudentIds, ...ioqmIds]));
+    setCoachedStudentIds(combined);
+    setAiReport("");
+  };
+
+  const handleBulkToggleAbsentees = () => {
+    const absIds = actionablePlan.absentees.map(a => a.student.id);
+    const combined = Array.from(new Set([...coachedStudentIds, ...absIds]));
+    setCoachedStudentIds(combined);
+    setAiReport("");
+  };
+
+  const handleBulkToggleRetention = () => {
+    const retIds = actionablePlan.retentionItems.map(r => r.student.id);
+    const combined = Array.from(new Set([...coachedStudentIds, ...retIds]));
+    setCoachedStudentIds(combined);
+    setAiReport("");
+  };
+
   // --- GOOGLE SPREADSHEET HANDLERS ---
   const handleGoogleLogin = async () => {
     try {
@@ -1646,13 +1682,14 @@ export default function App() {
               { id: "ramp_up", label: "Ramp Up Exams (15%)", icon: Sliders },
               { id: "attendance", label: "Test Attendance (10%)", icon: Users },
               { id: "retention", label: "Student Retention (30%)", icon: CheckCircle2 },
-              { id: "pool", label: "Student Pool Ledger", icon: Users }
+              { id: "pool", label: "Student Pool Ledger", icon: Users },
+              { id: "admin_rules", label: "Admin Rules & Math", icon: HelpCircle }
             ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => {
                   setSelectedTab(tab.id);
-                  if (tab.id !== "pool") {
+                  if (tab.id !== "pool" && tab.id !== "admin_rules") {
                     setLeaderboardMetric(tab.id as any);
                   }
                 }}
@@ -2630,6 +2667,546 @@ export default function App() {
                   </table>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ==========================================
+              TAB INTERACTION 8: ADMIN RULES & FORMULAS REFERENCE
+              ========================================== */}
+          {selectedTab === "admin_rules" && (
+            <div className="space-y-6" id="view-admin-rules-math">
+              
+              {/* ADMIN INTRO HEADER */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-3">
+                <span className="px-2.5 py-1 text-[9px] font-mono font-extrabold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full tracking-wider w-fit block">
+                  🔑 Restricted Workspace: Admin & Teacher Console
+                </span>
+                <h2 className="text-xl font-bold font-display text-slate-50 tracking-tight" id="admin-rules-title">
+                  📐 Evaluation Blueprint, Weightage & Live Formula Inspector
+                </h2>
+                <p className="text-xs text-slate-400 leading-relaxed font-sans">
+                  Yeh dashboard Physics Wallah (PW) Regional Center Leads dynamic rankings model ke rulebook ko transparently depict karta hai. 
+                  Below, check how scores for <strong className="text-yellow-400">{selectedCenterScores.centerName}</strong> are mathematically synthesized on-the-fly and deploy bulk target intervention campaigns.
+                </p>
+              </div>
+
+              {/* SECTION A: THE 5 EVALUATION WEIGHTAGE PILLARS */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6" id="math-blueprint-columns">
+                
+                {/* 1. SUBJECTIVE TEST CARD */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
+                    <span className="text-xs uppercase font-extrabold font-mono text-cyan-400 flex items-center gap-1.5">
+                      <BookOpen className="w-4 h-4" />
+                      1. Subjective Tests (25% Weight)
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-cyan-400 border border-slate-800">
+                      Score: {selectedCenterScores.subjectiveTestScore.toFixed(1)}/100
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-3.5 text-xs text-slate-300">
+                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block animate-pulse">Element A (60% Weight): Topper Threshold</span>
+                      <p className="leading-relaxed">
+                        Ratio of active students with a cumulative average &ge; 90%. If &ge; 15% of the center pool achieves this, 100 points is awarded. Otherwise, scaled linearly: <code>(Element_A_Ratio / 15) * 100</code>.
+                      </p>
+                      <div className="text-[10px] font-mono text-cyan-400 font-bold bg-slate-900/60 px-2 py-1 rounded border border-slate-800 mt-1 flex justify-between">
+                        <span>{selectedCenterScores.centerName} Active Toppers:</span>
+                        <span>{selectedCenterScores.elementA_percent.toFixed(1)}% &rarr; {selectedCenterScores.elementA_score.toFixed(1)}/100 pts</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Element B (40% Weight): Remediation Footprint</span>
+                      <p className="leading-relaxed">
+                        Ratio of individual paper scores falling under 40% (Fail rate). If fail rate is &le; 5%, 100 points is awarded. If &ge; 15%, 0 points is awarded. In-between (5%-15%), scaled linearly dropping from 100 to 0.
+                      </p>
+                      <div className="text-[10px] font-mono text-cyan-400 font-bold bg-slate-900/60 px-2 py-1 rounded border border-slate-800 mt-1 flex justify-between">
+                        <span>{selectedCenterScores.centerName} Fail-Rate:</span>
+                        <span>{selectedCenterScores.elementB_percent.toFixed(1)}% &rarr; {selectedCenterScores.elementB_score.toFixed(1)}/100 pts</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
+                      <p className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 select-all leading-relaxed break-all">
+                        ({selectedCenterScores.elementA_score.toFixed(1)} * 0.60) + ({selectedCenterScores.elementB_score.toFixed(1)} * 0.40) = <strong>{selectedCenterScores.subjectiveTestScore.toFixed(2)} pts</strong>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. IOQM ACHIEVEMENT CARD */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
+                    <span className="text-xs uppercase font-extrabold font-mono text-yellow-405 text-yellow-400 flex items-center gap-1.5">
+                      <Award className="w-4 h-4 text-yellow-400" />
+                      2. IOQM Achievement (20% Weight)
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-yellow-400 border border-slate-800">
+                      Score: {selectedCenterScores.ioqmScore.toFixed(1)}/100
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 text-xs text-slate-300">
+                    <p className="leading-relaxed">
+                      Olympiad performance is computed from the cumulative average IOQM marks of all active non-absent students.
+                    </p>
+                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Linear Scaling Thresholds</span>
+                      <ul className="list-disc list-inside space-y-1 text-slate-400 font-sans">
+                        <li>Average <strong className="text-slate-200">&lt; 40%</strong> &rarr; 0 Points</li>
+                        <li>Average <strong className="text-slate-200">&ge; 90%</strong> &rarr; 100 Points</li>
+                        <li>Average 40% &rarr; 90% &rarr; Linearly scaled: <code>((Avg - 40) / 50) * 100</code></li>
+                      </ul>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
+                      <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
+                        <div>Center Active Average IOQM: <strong className="text-slate-100">{selectedCenterScores.ioqm_percent.toFixed(2)}%</strong></div>
+                        <div className="pt-1 border-t border-slate-850/80 text-yellow-400 leading-relaxed">
+                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.ioqm_percent.toFixed(2)} - 40) / 50) * 100)) = <strong>{selectedCenterScores.ioqmScore.toFixed(2)} pts</strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. RAMP UP EXAMS CARD */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
+                    <span className="text-xs uppercase font-extrabold font-mono text-purple-400 flex items-center gap-1.5">
+                      <Sliders className="w-4 h-4 text-purple-400" />
+                      3. Ramp Up Exams (15% Weight)
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-purple-400 border border-slate-800">
+                      Score: {selectedCenterScores.rampUpScore.toFixed(1)}/100
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 text-xs text-slate-300">
+                    <p className="leading-relaxed">
+                      Targeted strictly at 9th and 10th graders to verify rapid academic growth. Measures the ratio of students scoring &gt; 80% on their Ramp Up tests.
+                    </p>
+                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Linear Scaling Thresholds</span>
+                      <ul className="list-disc list-inside space-y-1 text-slate-400 font-sans">
+                        <li>Toppers Ratio <strong className="text-slate-200">&lt; 1%</strong> &rarr; 0 Points</li>
+                        <li>Toppers Ratio <strong className="text-slate-200">&ge; 5%</strong> &rarr; 100 Points</li>
+                        <li>Ratio 1% &rarr; 5% &rarr; Linearly scaled: <code>((Ratio - 1) / 4) * 100</code></li>
+                      </ul>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
+                      <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
+                        <div>Center 9th/10th Toppers Ratio: <strong className="text-slate-100">{selectedCenterScores.rampUp_percent.toFixed(2)}%</strong></div>
+                        <div className="pt-1 border-t border-slate-850/80 text-purple-400 leading-relaxed">
+                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.rampUp_percent.toFixed(2)} - 1) / 4) * 100)) = <strong>{selectedCenterScores.rampUpScore.toFixed(2)} pts</strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. TEST ATTENDANCE CARD */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
+                    <span className="text-xs uppercase font-extrabold font-mono text-emerald-400 flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-emerald-400" />
+                      4. Test Attendance (10% Weight)
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-emerald-400 border border-slate-800">
+                      Score: {selectedCenterScores.testAttendanceScore.toFixed(1)}/100
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 text-xs text-slate-300">
+                    <p className="leading-relaxed">
+                      Tracks active pool attendance across subjective tests. High attendance yields consistent batch motivation.
+                    </p>
+                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Linear Scaling Thresholds</span>
+                      <ul className="list-disc list-inside space-y-1 text-slate-400 font-sans">
+                        <li>Attendance <strong className="text-slate-200">&lt; 50%</strong> &rarr; 0 Points</li>
+                        <li>Attendance <strong className="text-slate-200">&gt; 75%</strong> &rarr; 100 Points</li>
+                        <li>Attendance 50% &rarr; 75% &rarr; Linearly scaled: <code>((Attendance - 50) / 25) * 100</code></li>
+                      </ul>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
+                      <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
+                        <div>Center Active Attendance Rate: <strong className="text-slate-100">{selectedCenterScores.attendance_percent.toFixed(2)}%</strong></div>
+                        <div className="pt-1 border-t border-slate-850/80 text-emerald-400 leading-relaxed">
+                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.attendance_percent.toFixed(2)} - 50) / 25) * 100)) = <strong>{selectedCenterScores.testAttendanceScore.toFixed(2)} pts</strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. STUDENT RETENTION CARD */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-4 md:col-span-2">
+                  <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
+                    <span className="text-xs uppercase font-extrabold font-mono text-orange-400 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-orange-400" />
+                      5. Student Retention (30% Weight) - The Core Metric Lever
+                    </span>
+                    <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-orange-400 border border-slate-800">
+                      Score: {selectedCenterScores.studentRetentionScore.toFixed(1)}/100
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-300">
+                    <div className="space-y-2">
+                      <p className="leading-relaxed">
+                        Measures the ratio of student registrations retained in active status (no refunds, active in ledger). It contributes a heavy 30% towards the combined center performance.
+                      </p>
+                      <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1.5">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">Linear Scaling Thresholds</span>
+                        <ul className="list-disc list-inside space-y-1 text-slate-400 font-sans">
+                          <li>Retention <strong className="text-slate-200">&lt; 75%</strong> &rarr; 0 Points</li>
+                          <li>Retention <strong className="text-slate-200">&ge; 95%</strong> &rarr; 100 Points</li>
+                          <li>Retention 75% &rarr; 95% &rarr; Linear scale: <code>((Retention - 75) / 20) * 100</code></li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3.5 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Formula Equation Formulation:</span>
+                        <p className="text-[11px] leading-relaxed text-slate-400">
+                          <code>Retention Rate = (Total - Defaulters) / Total</code>. This maps center stability and community satisfaction with teachers classes.
+                        </p>
+                      </div>
+
+                      <div className="border-t border-slate-800/60 pt-2">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
+                        <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
+                          <div>Center Active Retention Rate: <strong className="text-slate-100">{selectedCenterScores.retention_percent.toFixed(2)}%</strong></div>
+                          <div className="pt-1 border-t border-slate-850/80 text-orange-400 leading-relaxed">
+                            Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.retention_percent.toFixed(2)} - 75) / 20) * 100)) = <strong>{selectedCenterScores.studentRetentionScore.toFixed(2)} pts</strong>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* THE CONSOLIDATED FINAL CARD */}
+                <div className="bg-slate-900 border-2 border-yellow-500/20 rounded-xl p-6 md:col-span-2 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-yellow-400 animate-pulse" />
+                      <h3 className="text-sm font-bold font-display text-slate-50 uppercase tracking-tight">
+                        Synthesis: {selectedCenterScores.centerName} Consolidated Final Score
+                      </h3>
+                    </div>
+                    <span className="bg-yellow-500/15 border border-yellow-500/30 text-yellow-405 text-yellow-400 font-mono font-bold text-sm px-3 py-1 rounded">
+                      Consolidated: {selectedCenterScores.consolidatedScore.toFixed(1)}/100
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-400">
+                    Five-pillar weights applied: <strong>25% Subjective Tests</strong>, <strong>20% IOQM</strong>, <strong>15% Ramp Up</strong>, <strong>10% Attendance</strong>, and <strong>30% Student Retention</strong>. Niche visual mapping below portrays exact weighted point contribution.
+                  </p>
+
+                  <div className="space-y-3.5">
+                    {/* Visual Progress Composition bar */}
+                    <div className="h-6 w-full rounded-lg overflow-hidden flex font-mono text-[9px] font-bold text-slate-950 select-none border border-slate-950">
+                      <div 
+                        title={`Subjective Contribution: ${(selectedCenterScores.subjectiveTestScore * 0.25).toFixed(1)} pts`}
+                        style={{ width: `${(selectedCenterScores.subjectiveTestScore * 0.25)}%` }} 
+                        className="bg-cyan-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
+                      >
+                        SUB
+                      </div>
+                      <div 
+                        title={`IOQM Contribution: ${(selectedCenterScores.ioqmScore * 0.20).toFixed(1)} pts`}
+                        style={{ width: `${(selectedCenterScores.ioqmScore * 0.20)}%` }} 
+                        className="bg-yellow-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
+                      >
+                        IOQM
+                      </div>
+                      <div 
+                        title={`Ramp Up Contribution: ${(selectedCenterScores.rampUpScore * 0.15).toFixed(1)} pts`}
+                        style={{ width: `${(selectedCenterScores.rampUpScore * 0.15)}%` }} 
+                        className="bg-purple-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
+                      >
+                        RAMP
+                      </div>
+                      <div 
+                        title={`Attendance Contribution: ${(selectedCenterScores.testAttendanceScore * 0.10).toFixed(1)} pts`}
+                        style={{ width: `${(selectedCenterScores.testAttendanceScore * 0.10)}%` }} 
+                        className="bg-emerald-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
+                      >
+                        ATTN
+                      </div>
+                      <div 
+                        title={`Retention Contribution: ${(selectedCenterScores.studentRetentionScore * 0.30).toFixed(1)} pts`}
+                        style={{ width: `${(selectedCenterScores.studentRetentionScore * 0.30)}%` }} 
+                        className="bg-orange-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
+                      >
+                        RETD
+                      </div>
+                    </div>
+
+                    {/* Legendary Keys Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 text-[10px] font-mono text-slate-400">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 bg-cyan-400 rounded-sm shrink-0" />
+                        <span>Subjective (25%): <strong className="text-slate-200">{(selectedCenterScores.subjectiveTestScore * 0.25).toFixed(1)}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 bg-yellow-400 rounded-sm shrink-0" />
+                        <span>IOQM (20%): <strong className="text-slate-200">{(selectedCenterScores.ioqmScore * 0.20).toFixed(1)}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 bg-purple-400 rounded-sm shrink-0" />
+                        <span>Ramp Up (15%): <strong className="text-slate-200">{(selectedCenterScores.rampUpScore * 0.15).toFixed(1)}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 bg-emerald-400 rounded-sm shrink-0" />
+                        <span>Attendance (10%): <strong className="text-slate-200">{(selectedCenterScores.testAttendanceScore * 0.10).toFixed(1)}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 bg-orange-400 rounded-sm shrink-0" />
+                        <span>Retention (30%): <strong className="text-slate-200">{(selectedCenterScores.studentRetentionScore * 0.30).toFixed(1)}</strong></span>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 italic text-center pt-1 border-t border-slate-800/60 font-mono">
+                      Dynamic Consolidated Equation: Subjective*0.25 + IOQM*0.20 + RampUp*0.15 + Attendance*0.10 + Retention*0.30 = {(selectedCenterScores.consolidatedScore).toFixed(1)} points
+                    </p>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* SECTION B: CORE NATIONAL COMPREHENSIVE RANK CHECKS COMPARATOR TABLE */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-lg font-bold font-display text-slate-50 flex items-center gap-2">
+                      <Award className="w-5 h-5 text-yellow-500 shrink-0" />
+                      🥇 Comprehensive National Center Leaderboard Check (All Ranks Side-by-Side)
+                    </h3>
+                    <p className="text-xs text-slate-400">Review other center standing criteria scores in a unified admin spreadsheet index grid.</p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-800 rounded-lg">
+                  <table className="w-full text-left text-xs bg-slate-950 font-sans">
+                    <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800 text-[10px] uppercase">
+                      <tr>
+                        <th className="p-3">Rank</th>
+                        <th className="p-3 text-left">Center Hub</th>
+                        <th className="p-3 text-center text-yellow-405 text-yellow-405 text-yellow-400 font-bold bg-yellow-500/5">Overall Score</th>
+                        <th className="p-3 text-center text-cyan-400">Subjective (25%)</th>
+                        <th className="p-3 text-center text-yellow-500 font-medium">IOQM (20%)</th>
+                        <th className="p-3 text-center text-purple-400">Ramp Up (15%)</th>
+                        <th className="p-2.5 text-center text-emerald-400">Attn (10%)</th>
+                        <th className="p-2.5 text-center text-orange-400">Retn (30%)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-850">
+                      {rankedCenters.map((item) => {
+                        const isSelectedCenter = item.centerName === selectedCenterName;
+                        return (
+                          <tr 
+                            key={item.centerName} 
+                            onClick={() => setSelectedCenterName(item.centerName)}
+                            className={`transition-colors cursor-pointer hover:bg-slate-850/40 text-[11px] ${
+                              isSelectedCenter ? "bg-slate-800/70 border-y-2 border-yellow-500/50 animate-pulse" : ""
+                            }`}
+                          >
+                            <td className="p-3 font-mono font-extrabold text-slate-50 border-r border-slate-800/40">
+                              <span className={`px-2 py-0.5 rounded ${
+                                item.rank === 1 ? "bg-yellow-500/20 text-yellow-400" :
+                                item.rank === 2 ? "bg-slate-350/25 text-slate-300" :
+                                item.rank === 3 ? "bg-amber-700/25 text-amber-500" : "text-slate-400"
+                              }`}>
+                                #{item.rank}
+                              </span>
+                            </td>
+                            <td className="p-3 font-semibold text-slate-200">
+                              <div className="flex items-center gap-1.5">
+                                <span className={isSelectedCenter ? "text-yellow-450 text-yellow-400 font-bold" : "text-slate-300"}>
+                                  {item.centerName}
+                                </span>
+                                {isSelectedCenter && <span className="bg-yellow-400 text-slate-950 font-mono font-bold text-[8px] px-1.5 py-0.2 rounded shrink-0 uppercase">Active</span>}
+                              </div>
+                            </td>
+                            <td className="p-3 font-mono font-bold text-center bg-yellow-500/10 text-yellow-400 text-xs shadow-inner">
+                              {item.consolidatedScore.toFixed(1)}
+                            </td>
+                            <td className="p-3 font-mono text-center text-slate-300">
+                              {item.subjectiveTestScore.toFixed(1)}
+                            </td>
+                            <td className="p-3 font-mono text-center text-slate-300">
+                              {item.ioqmScore.toFixed(1)}
+                            </td>
+                            <td className="p-3 font-mono text-center text-slate-300">
+                              {item.rampUpScore.toFixed(1)}
+                            </td>
+                            <td className="p-2.5 font-mono text-center text-slate-300">
+                              {item.testAttendanceScore.toFixed(1)}
+                            </td>
+                            <td className="p-2.5 font-mono text-center text-slate-300">
+                              {item.studentRetentionScore.toFixed(1)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* SECTION C: BULK DIRECT INTERVENTIONS - PERFORMANCE IMPROVEMENT SCOPE */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
+                  <div>
+                    <h3 className="text-lg font-bold font-display text-slate-50 flex items-center gap-2">
+                      <Sparkles className="text-cyan-400 w-5 h-5 shrink-0" />
+                      🛠️ Teacher-Lead Improvement Scope Bulk Intervention Triggers
+                    </h3>
+                    <p className="text-xs text-slate-400">Apply simulated bulk remedial actions directly to active pupil groups in {selectedCenterScores.centerName} and check the instant recalculation results.</p>
+                  </div>
+                  {coachedStudentIds.length > 0 && (
+                    <button
+                      onClick={handleResetSimulation}
+                      className="bg-rose-500/10 hover:bg-rose-500/25 text-rose-455 text-rose-400 border border-rose-500/25 px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1 active:scale-98 transition shadow cursor-pointer whitespace-nowrap"
+                    >
+                      🗑️ Clean Simulation
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  
+                  {/* Lever 1: Failures Doubt Remediation */}
+                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 1: SUBJECTIVE FAIL REMEDIATION</span>
+                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.subjectiveFailings.length} papers failing</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                        Weekly remedial class runs targeted to fail-risk students. Boosts all subject entrance slips under 40% to 45% (eliminates failures and maxes out your Subjective Element B footprint!).
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleBulkToggleFailing}
+                      disabled={actionablePlan.subjectiveFailings.length === 0}
+                      className="w-full text-center bg-cyan-900/30 hover:bg-cyan-800/40 text-cyan-205 py-1.5 rounded font-mono font-bold text-[10px] transition border border-cyan-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                    >
+                      ⚡ Run Doubt-Class Sheet Simulation
+                    </button>
+                  </div>
+
+                  {/* Lever 2: Propel Near Toppers */}
+                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-yellow-450 text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded uppercase">LEVER 2: PROPEL NEAR-TOPPERS BRACKETS</span>
+                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.subjectiveTopperPotentials.length} candidates found</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                        Deploy elite question sets for borderline students (80-89% averages). Propels them to the 90%+ scholar grade, heavily scaling up subjective Element A points!
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleBulkToggleNearToppers}
+                      disabled={actionablePlan.subjectiveTopperPotentials.length === 0}
+                      className="w-full text-center bg-yellow-950/30 hover:bg-yellow-905/40 text-yellow-405 text-yellow-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-yellow-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                    >
+                      ⭐ Boost Borderline Scholar Ratio
+                    </button>
+                  </div>
+
+                  {/* Lever 3: IOQM Prep Campaigns */}
+                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-450 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 3: OLYMPIAD CAMPAIGN FOCUS</span>
+                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.ioqmItems.length} at-risk</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                        Deliver custom math-puzzle checksheets to non-scholar pupils. Simulates raising their IOQM achievements to 90% in average bounds.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleBulkToggleIoqm}
+                      disabled={actionablePlan.ioqmItems.length === 0}
+                      className="w-full text-center bg-slate-900 hover:bg-slate-855 text-cyan-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-slate-800 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                    >
+                      🏆 Apply IOQM Olympiad Prep Simulator
+                    </button>
+                  </div>
+
+                  {/* Lever 4: Convert Absenteeism */}
+                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-emerald-450 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase">LEVER 4: ATTENDANCE ENTRANCE RECOVERY</span>
+                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.absentees.length} absent entries</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                        Perform routine teacher calls to single-evaluation absent student homes. Simulates bringing their test appearance to 100% attendance rate.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleBulkToggleAbsentees}
+                      disabled={actionablePlan.absentees.length === 0}
+                      className="w-full text-center bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-emerald-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                    >
+                      📅 Convert Absentee Slips to Present
+                    </button>
+                  </div>
+
+                  {/* Lever 5: 100% Retention */}
+                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3 md:col-span-2">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-orange-455 text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded uppercase">LEVER 5: 100% REGIONAL STUDENT RETENTION</span>
+                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.retentionItems.length} dropout/defaulter risks</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                        Counseling calls to resolve parent disputes, fee queries, and course drops. Resolves and marks all inactive status pupils in center's pool as fully retained.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleBulkToggleRetention}
+                      disabled={actionablePlan.retentionItems.length === 0}
+                      className="w-full text-center bg-orange-950/30 hover:bg-orange-900/40 text-orange-450 text-orange-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-orange-850/50 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                    >
+                      🔄 Run Comprehensive 100% Retention Recovery
+                    </button>
+                  </div>
+
+                </div>
+
+                <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col sm:flex-row items-center justify-between text-xs font-sans text-slate-400 gap-3">
+                  <div className="flex items-center gap-2">
+                    <Info className="w-4 h-4 text-cyan-400 shrink-0" />
+                    <span>Active simulated interventions: <strong className="font-mono text-yellow-455 text-yellow-400">{coachedStudentIds.length} pupils coached</strong>. Recalculations are processed on-the-fly.</span>
+                  </div>
+                  {coachedStudentIds.length > 0 && (
+                    <button
+                      onClick={handleResetSimulation}
+                      className="bg-slate-900 text-slate-200 border border-slate-850 hover:text-slate-50 hover:bg-slate-800 font-bold px-3 py-1 rounded transition text-[10px] cursor-pointer"
+                    >
+                      Restore Raw Stats
+                    </button>
+                  )}
+                </div>
+
+              </div>
+
             </div>
           )}
 
