@@ -64,7 +64,8 @@ export default function App() {
   // --- STATES ---
   const [students, setStudents] = useState<Student[]>(PRELOADED_STUDENTS);
   const [selectedCenterName, setSelectedCenterName] = useState<string>("Lucknow Chowk Centre");
-  const [selectedTab, setSelectedTab] = useState<string>("diagnostic");
+  const [selectedTab, setSelectedTab] = useState<string>("combined");
+  const [isAdmin, setIsAdmin] = useState<boolean>(true);
   const [leaderboardMetric, setLeaderboardMetric] = useState<"combined" | "subjective" | "ioqm" | "ramp_up" | "attendance" | "retention">("combined");
   
   // Track IDs of students whose borderline grades we are simulating coaching for
@@ -651,6 +652,23 @@ export default function App() {
       downloadStudentsXLSX(students, "pw_active_students_ledger.xlsx");
     } catch (e) {
       console.error("Active XLSX download failed:", e);
+    }
+  };
+
+  const handleDownloadActiveCSV = () => {
+    try {
+      const csv = generateCSVTemplateString(simulatedStudents);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `pw_active_students_ledger_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      console.error("Active CSV export failed:", e);
     }
   };
 
@@ -2688,6 +2706,77 @@ export default function App() {
                   Yeh dashboard Physics Wallah (PW) Regional Center Leads dynamic rankings model ke rulebook ko transparently depict karta hai. 
                   Below, check how scores for <strong className="text-yellow-400">{selectedCenterScores.centerName}</strong> are mathematically synthesized on-the-fly and deploy bulk target intervention campaigns.
                 </p>
+              </div>
+
+              {/* RESTRICTED ADMIN EXPORT AREA */}
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4" id="admin-export-wrapper">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 text-[9px] font-mono font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded">
+                        🔒 ADMIN ONLY
+                      </span>
+                      <h3 className="text-md font-bold font-display text-slate-50 flex items-center gap-2">
+                        🔑 Admin Administrative Export Control
+                      </h3>
+                    </div>
+                    <p className="text-xs text-slate-400">Securely download current/simulated student records as CSV.</p>
+                  </div>
+                  
+                  {/* Role switch simulation widget */}
+                  <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-lg border border-slate-850">
+                    <span className="text-[10px] font-mono font-bold text-slate-400 px-1.5 label-role">Active Role:</span>
+                    <button
+                      onClick={() => setIsAdmin(true)}
+                      className={`px-2.5 py-1 rounded text-[10px] font-mono font-extrabold transition-all duration-150 cursor-pointer ${
+                        isAdmin 
+                          ? "bg-rose-500/25 text-rose-400 border border-rose-500/30" 
+                          : "text-slate-500 hover:text-slate-350"
+                      }`}
+                      id="admin-role-btn-admin"
+                    >
+                      Admin
+                    </button>
+                    <button
+                      onClick={() => setIsAdmin(false)}
+                      className={`px-2.5 py-1 rounded text-[10px] font-mono font-extrabold transition-all duration-150 cursor-pointer ${
+                        !isAdmin 
+                          ? "bg-slate-800 text-slate-300 border border-slate-700" 
+                          : "text-slate-500 hover:text-slate-350"
+                      }`}
+                      id="admin-role-btn-viewer"
+                    >
+                      Viewer
+                    </button>
+                  </div>
+                </div>
+
+                {isAdmin ? (
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-950/45 border border-slate-850 p-4 rounded-lg">
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-bold text-slate-205 flex items-center gap-1.5">
+                        <Download className="w-3.5 h-3.5 text-emerald-400" />
+                        Download Student Ledger
+                      </span>
+                      <p className="text-[10px] text-slate-450 leading-relaxed font-sans max-w-xl">
+                        Aapka active system access authorized hai. Yeh tool instant high-fidelity student records database transform kar ke standard tabbed CSV compile aur trigger karega.
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleDownloadActiveCSV}
+                      className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold py-2 px-4 rounded-lg text-xs flex items-center justify-center gap-2 transition active:scale-98 cursor-pointer shadow-md shadow-emerald-500/5 whitespace-nowrap"
+                      id="export-active-csv-btn"
+                    >
+                      <Download className="w-4 h-4" />
+                      Export Data to CSV
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-950/80 border border-slate-850/80 rounded-lg flex items-center gap-3 text-xs text-slate-400 border-dashed">
+                    <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                    <span>Access Denied. Yeh data ledger functions strictly restricted hain. Only authorized **PW Admins** can access or trigger CSV compilation.</span>
+                  </div>
+                )}
               </div>
 
               {/* SECTION A: THE 5 EVALUATION WEIGHTAGE PILLARS */}
