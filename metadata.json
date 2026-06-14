@@ -1,0 +1,6 @@
+{
+  "name": "Teacher Analytics Dashboard",
+  "description": "An interactive diagnostic analytics engine and What-If simulator for center managers and teachers to find academic gaps (kya kami reh gayi thi) and simulate ranking improvements.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
