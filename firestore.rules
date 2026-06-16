@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (default-deny catch-all)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // 2. Custom Students collection match block
+    match /students/{studentId} {
+      allow read, write: if true;
+    }
+
+    // 3. Custom Coaching collection match block
+    match /coaching/{documentId} {
+      allow read, write: if true;
+    }
+  }
+}

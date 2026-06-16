@@ -10,8 +10,10 @@ import { getRankedCenters } from "../data";
  */
 export function downloadStudentsXLSX(studentsList: Student[], fileName: string) {
   try {
+    const wb = XLSX.utils.book_new();
+
     // =====================================
-    // SHEET 1: Students Ledger
+    // WORKSHEET 1: Students Ledger (Combined Standard)
     // =====================================
     const headers = [
       "Student ID",
@@ -49,32 +51,177 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
       s.retained ? "Yes" : "No"
     ]);
 
-    const wb = XLSX.utils.book_new();
     const ws_ledger = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-
-    // Apply auto-fit column widths to Student Ledger sheet
     ws_ledger["!cols"] = [
       { wch: 15 }, // Student ID
       { wch: 22 }, // Student Name
-      { wch: 15 }, // Grade (9,10,11,12)
+      { wch: 15 }, // Grade
       { wch: 24 }, // Center Name
       { wch: 20 }, // T1 Attendance
       { wch: 20 }, // T2 Attendance
-      { wch: 15 }, // T1 Physics Score (%)
+      { wch: 15 }, // T1 Physics
       { wch: 15 }, // T1 Chem
       { wch: 15 }, // T1 Maths
       { wch: 15 }, // T2 Physics
       { wch: 15 }, // T2 Chem
       { wch: 15 }, // T2 Maths
-      { wch: 12 }, // IOQM Score (%)
-      { wch: 14 }, // Ramp Up Score (%)
-      { wch: 12 }  // Retained (Yes/No)
+      { wch: 12 }, // IOQM
+      { wch: 14 }, // Ramp Up
+      { wch: 12 }  // Retained
     ];
-
     XLSX.utils.book_append_sheet(wb, ws_ledger, "Students Ledger");
 
     // =====================================
-    // SHEET 2: Center Rankings & Scores (Computed dynamically based on active dataset)
+    // WORKSHEET 2: Retention Ledger (Format #1)
+    // =====================================
+    const retentionHeaders = [
+      "regno",
+      "region",
+      "combined_center",
+      "cohort",
+      "batch",
+      "student_name",
+      "defaulter_status",
+      "Admission Cancellation",
+      "Inactive",
+      "Retention"
+    ];
+
+    const retentionRows = studentsList.map(s => [
+      s.id,
+      s.region || (s.center.toLowerCase().includes("lucknow") ? "Uttar Pradesh" : "Rajasthan"),
+      s.center,
+      s.grade ? `${s.grade}th Foundation` : "10th Foundation",
+      s.batch || "11-NF101EA",
+      s.name,
+      s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
+      s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
+      s.inactive || (s.retained ? "" : "Inactive"),
+      s.retained ? "Yes" : "No"
+    ]);
+
+    const ws_retention = XLSX.utils.aoa_to_sheet([retentionHeaders, ...retentionRows]);
+    ws_retention["!cols"] = [
+      { wch: 15 }, // regno
+      { wch: 15 }, // region
+      { wch: 24 }, // combined_center
+      { wch: 18 }, // cohort
+      { wch: 15 }, // batch
+      { wch: 22 }, // student_name
+      { wch: 20 }, // defaulter_status
+      { wch: 22 }, // Admission Cancellation
+      { wch: 15 }, // Inactive
+      { wch: 12 }  // Retention
+    ];
+    XLSX.utils.book_append_sheet(wb, ws_retention, "Retention Ledger");
+
+    // =====================================
+    // WORKSHEET 3: Results Ledger (Format #2)
+    // =====================================
+    const resultHeaders = [
+      "center",
+      "registration_number",
+      "name_of_students",
+      "batch",
+      "class",
+      "test_date",
+      "test_name",
+      "attendance",
+      "sst",
+      "urdu",
+      "maths",
+      "english",
+      "science",
+      "english_languageicse",
+      "sst_icse",
+      "total_marks",
+      "subject_total_marks",
+      "total_obtained",
+      "sst_pct",
+      "urdu_pct",
+      "maths_pct",
+      "english_pct",
+      "science_pct"
+    ];
+
+    const resultRows = studentsList.map(s => {
+      const attendanceVal = s.attendance || (s.t2_attendance === "Present" ? "Present" : "Absent");
+      const isAbsent = attendanceVal.toLowerCase().includes("abs") || attendanceVal.toLowerCase().includes("no");
+      
+      const pMaths = s.maths_pct ?? s.t2_scores.maths ?? (isAbsent ? undefined : 76);
+      const pScience = s.science_pct ?? s.t2_scores.chemistry ?? (isAbsent ? undefined : 82);
+      const pEnglish = s.english_pct ?? s.t2_scores.physics ?? (isAbsent ? undefined : 70);
+      const pSst = s.sst_pct ?? s.t1_scores.physics ?? (isAbsent ? undefined : 75);
+      const pUrdu = s.urdu_pct ?? s.t1_scores.chemistry ?? (isAbsent ? undefined : 80);
+
+      // Convert percentages to out-of-40 absolute score helper
+      const calcAbs = (pct?: number) => pct !== undefined ? Math.round((pct / 100) * 40) : "";
+
+      const sstAbs = calcAbs(pSst);
+      const urduAbs = calcAbs(pUrdu);
+      const mathsAbs = calcAbs(pMaths);
+      const englishAbs = calcAbs(pEnglish);
+      const scienceAbs = calcAbs(pScience);
+
+      const totalObtained = isAbsent ? 0 : [sstAbs, urduAbs, mathsAbs, englishAbs, scienceAbs].reduce((sum: number, cur) => sum + (typeof cur === "number" ? cur : 0), 0);
+
+      return [
+        s.center,
+        s.id,
+        s.name,
+        s.batch || "44-UP121ES",
+        s.grade,
+        s.test_date || "25 May, 2026",
+        s.test_name || "Term II Subjective Test - 2",
+        attendanceVal,
+        sstAbs,
+        urduAbs,
+        mathsAbs,
+        englishAbs,
+        scienceAbs,
+        "", // english_languageicse
+        "", // sst_icse
+        200, // total_marks
+        40,  // subject_total_marks
+        totalObtained,
+        pSst !== undefined ? `${pSst}%` : "",
+        pUrdu !== undefined ? `${pUrdu}%` : "",
+        pMaths !== undefined ? `${pMaths}%` : "",
+        pEnglish !== undefined ? `${pEnglish}%` : "",
+        pScience !== undefined ? `${pScience}%` : ""
+      ];
+    });
+
+    const ws_results = XLSX.utils.aoa_to_sheet([resultHeaders, ...resultRows]);
+    ws_results["!cols"] = [
+      { wch: 24 }, // center
+      { wch: 15 }, // registration_number
+      { wch: 22 }, // name_of_students
+      { wch: 15 }, // batch
+      { wch: 10 }, // class
+      { wch: 15 }, // test_date
+      { wch: 25 }, // test_name
+      { wch: 15 }, // attendance
+      { wch: 8 },  // sst
+      { wch: 8 },  // urdu
+      { wch: 8 },  // maths
+      { wch: 8 },  // english
+      { wch: 8 },  // science
+      { wch: 15 }, // english_icse
+      { wch: 10 }, // sst_icse
+      { wch: 12 }, // total_marks
+      { wch: 15 }, // subject_total_marks
+      { wch: 15 }, // total_obtained
+      { wch: 10 }, // sst_pct
+      { wch: 10 }, // urdu_pct
+      { wch: 10 }, // maths_pct
+      { wch: 10 }, // english_pct
+      { wch: 10 }  // science_pct
+    ];
+    XLSX.utils.book_append_sheet(wb, ws_results, "Results Ledger");
+
+    // =====================================
+    // WORKSHEET 4: Center Rankings & Scores (Computed dynamically based on active dataset)
     // =====================================
     const rankedCenters = getRankedCenters(studentsList);
     const centerHeaders = [
@@ -140,7 +287,7 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
     XLSX.utils.book_append_sheet(wb, ws_centers, "Center Rankings & Scores");
 
     // =====================================
-    // SHEET 3: Dashboard Scoring Logics (Exact mapping of the user's provided logic image)
+    // WORKSHEET 5: Dashboard Scoring Logics (Exact mapping of the user's provided logic image)
     // =====================================
     const ruleHeaders = [
       "Metric Component",
@@ -269,3 +416,409 @@ export async function fetchPublicSpreadsheet(spreadsheetId: string): Promise<any
   return rows;
 }
 
+/**
+ * Downloads the active students in Format #1: Retention Ledger format.
+ */
+export function downloadRetentionXLSX(studentsList: Student[], fileName: string) {
+  try {
+    const wb = XLSX.utils.book_new();
+    const retentionHeaders = [
+      "regno",
+      "region",
+      "combined_center",
+      "cohort",
+      "batch",
+      "student_name",
+      "defaulter_status",
+      "Admission Cancellation",
+      "Inactive",
+      "Retention"
+    ];
+
+    const retentionRows = studentsList.map(s => [
+      s.id,
+      s.region || (s.center.toLowerCase().includes("lucknow") ? "Uttar Pradesh" : "Rajasthan"),
+      s.center,
+      s.grade ? `${s.grade}th Foundation` : "10th Foundation",
+      s.batch || "11-NF101EA",
+      s.name,
+      s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
+      s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
+      s.inactive || (s.retained ? "" : "Inactive"),
+      s.retained ? "Yes" : "No"
+    ]);
+
+    const ws_retention = XLSX.utils.aoa_to_sheet([retentionHeaders, ...retentionRows]);
+    ws_retention["!cols"] = [
+      { wch: 15 }, // regno
+      { wch: 15 }, // region
+      { wch: 24 }, // combined_center
+      { wch: 18 }, // cohort
+      { wch: 15 }, // batch
+      { wch: 22 }, // student_name
+      { wch: 20 }, // defaulter_status
+      { wch: 22 }, // Admission Cancellation
+      { wch: 15 }, // Inactive
+      { wch: 12 }  // Retention
+    ];
+    XLSX.utils.book_append_sheet(wb, ws_retention, "Retention Ledger");
+    XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
+  } catch (err) {
+    console.error("Retention XLSX write failed:", err);
+  }
+}
+
+/**
+ * Downloads the active students in Format #2: Results Marks format.
+ */
+export function downloadResultsXLSX(studentsList: Student[], fileName: string) {
+  try {
+    const wb = XLSX.utils.book_new();
+    const resultHeaders = [
+      "center",
+      "registration_number",
+      "name_of_students",
+      "batch",
+      "class",
+      "test_date",
+      "test_name",
+      "attendance",
+      "sst",
+      "urdu",
+      "maths",
+      "english",
+      "science",
+      "english_languageicse",
+      "sst_icse",
+      "total_marks",
+      "subject_total_marks",
+      "total_obtained",
+      "sst_pct",
+      "urdu_pct",
+      "maths_pct",
+      "english_pct",
+      "science_pct"
+    ];
+
+    const resultRows = studentsList.map(s => {
+      const attendanceVal = s.attendance || (s.t2_attendance === "Present" ? "Present" : "Absent");
+      const isAbsent = attendanceVal.toLowerCase().includes("abs") || attendanceVal.toLowerCase().includes("no");
+      
+      const pMaths = s.maths_pct ?? s.t2_scores.maths ?? (isAbsent ? undefined : 76);
+      const pScience = s.science_pct ?? s.t2_scores.chemistry ?? (isAbsent ? undefined : 82);
+      const pEnglish = s.english_pct ?? s.t2_scores.physics ?? (isAbsent ? undefined : 70);
+      const pSst = s.sst_pct ?? s.t1_scores.physics ?? (isAbsent ? undefined : 75);
+      const pUrdu = s.urdu_pct ?? s.t1_scores.chemistry ?? (isAbsent ? undefined : 80);
+
+      const calcAbs = (pct?: number) => pct !== undefined ? Math.round((pct / 100) * 40) : "";
+
+      const sstAbs = calcAbs(pSst);
+      const urduAbs = calcAbs(pUrdu);
+      const mathsAbs = calcAbs(pMaths);
+      const englishAbs = calcAbs(pEnglish);
+      const scienceAbs = calcAbs(pScience);
+
+      const totalObtained = isAbsent ? 0 : [sstAbs, urduAbs, mathsAbs, englishAbs, scienceAbs].reduce((sum: number, cur) => sum + (typeof cur === "number" ? cur : 0), 0);
+
+      return [
+        s.center,
+        s.id,
+        s.name,
+        s.batch || "44-UP121ES",
+        s.grade,
+        s.test_date || "25 May, 2026",
+        s.test_name || "Term II Subjective Test - 2",
+        attendanceVal,
+        sstAbs,
+        urduAbs,
+        mathsAbs,
+        englishAbs,
+        scienceAbs,
+        "", // english_languageicse
+        "", // sst_icse
+        200, // total_marks
+        40,  // subject_total_marks
+        totalObtained,
+        pSst !== undefined ? `${pSst}%` : "",
+        pUrdu !== undefined ? `${pUrdu}%` : "",
+        pMaths !== undefined ? `${pMaths}%` : "",
+        pEnglish !== undefined ? `${pEnglish}%` : "",
+        pScience !== undefined ? `${pScience}%` : ""
+      ];
+    });
+
+    const ws_results = XLSX.utils.aoa_to_sheet([resultHeaders, ...resultRows]);
+    ws_results["!cols"] = [
+      { wch: 24 }, // center
+      { wch: 15 }, // registration_number
+      { wch: 22 }, // name_of_students
+      { wch: 15 }, // batch
+      { wch: 10 }, // class
+      { wch: 15 }, // test_date
+      { wch: 25 }, // test_name
+      { wch: 15 }, // attendance
+      { wch: 8 },  // sst
+      { wch: 8 },  // urdu
+      { wch: 8 },  // maths
+      { wch: 8 },  // english
+      { wch: 8 },  // science
+      { wch: 15 }, // english_icse
+      { wch: 10 }, // sst_icse
+      { wch: 12 }, // total_marks
+      { wch: 15 }, // subject_total_marks
+      { wch: 15 }, // total_obtained
+      { wch: 10 }, // sst_pct
+      { wch: 10 }, // urdu_pct
+      { wch: 10 }, // maths_pct
+      { wch: 10 }, // english_pct
+      { wch: 10 }  // science_pct
+    ];
+    XLSX.utils.book_append_sheet(wb, ws_results, "Results Ledger");
+    XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
+  } catch (err) {
+    console.error("Results XLSX write failed:", err);
+  }
+}
+
+/**
+ * Generates a fully formatted CSV representation of preset students in Retention Sheet format.
+ */
+export function generateRetentionCSVTemplateString(studentsList: Student[]): string {
+  const retentionHeaders = [
+    "regno",
+    "region",
+    "combined_center",
+    "cohort",
+    "batch",
+    "student_name",
+    "defaulter_status",
+    "Admission Cancellation",
+    "Inactive",
+    "Retention"
+  ];
+
+  const lines = [retentionHeaders.join(",")];
+
+  studentsList.forEach(s => {
+    const row = [
+      s.id,
+      s.region || (s.center.toLowerCase().includes("lucknow") ? "Uttar Pradesh" : "Rajasthan"),
+      `"${s.center.replace(/"/g, '""')}"`,
+      s.grade ? `"${s.grade}th Foundation"` : `"10th Foundation"`,
+      s.batch || "11-NF101EA",
+      `"${s.name.replace(/"/g, '""')}"`,
+      s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
+      s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
+      s.inactive || (s.retained ? "" : "Inactive"),
+      s.retained ? "Yes" : "No"
+    ];
+    lines.push(row.join(","));
+  });
+
+  return lines.join("\n");
+}
+
+/**
+ * Generates a fully formatted CSV representation of preset students in Results Sheet format.
+ */
+export function generateResultsCSVTemplateString(studentsList: Student[]): string {
+  const resultHeaders = [
+    "center",
+    "registration_number",
+    "name_of_students",
+    "batch",
+    "class",
+    "test_date",
+    "test_name",
+    "attendance",
+    "sst",
+    "urdu",
+    "maths",
+    "english",
+    "science",
+    "english_languageicse",
+    "sst_icse",
+    "total_marks",
+    "subject_total_marks",
+    "total_obtained",
+    "sst_pct",
+    "urdu_pct",
+    "maths_pct",
+    "english_pct",
+    "science_pct"
+  ];
+
+  const lines = [resultHeaders.join(",")];
+
+  studentsList.forEach(s => {
+    const attendanceVal = s.attendance || (s.t2_attendance === "Present" ? "Present" : "Absent");
+    const isAbsent = attendanceVal.toLowerCase().includes("abs") || attendanceVal.toLowerCase().includes("no");
+    
+    const pMaths = s.maths_pct ?? s.t2_scores.maths ?? (isAbsent ? undefined : 76);
+    const pScience = s.science_pct ?? s.t2_scores.chemistry ?? (isAbsent ? undefined : 82);
+    const pEnglish = s.english_pct ?? s.t2_scores.physics ?? (isAbsent ? undefined : 70);
+    const pSst = s.sst_pct ?? s.t1_scores.physics ?? (isAbsent ? undefined : 75);
+    const pUrdu = s.urdu_pct ?? s.t1_scores.chemistry ?? (isAbsent ? undefined : 80);
+
+    const calcAbs = (pct?: number) => pct !== undefined ? Math.round((pct / 100) * 40) : "";
+
+    const sstAbs = calcAbs(pSst);
+    const urduAbs = calcAbs(pUrdu);
+    const mathsAbs = calcAbs(pMaths);
+    const englishAbs = calcAbs(pEnglish);
+    const scienceAbs = calcAbs(pScience);
+
+    const totalObtained = isAbsent ? 0 : [sstAbs, urduAbs, mathsAbs, englishAbs, scienceAbs].reduce((sum: number, cur) => sum + (typeof cur === "number" ? cur : 0), 0);
+
+    const row = [
+      `"${s.center.replace(/"/g, '""')}"`,
+      s.id,
+      `"${s.name.replace(/"/g, '""')}"`,
+      s.batch || "44-UP121ES",
+      s.grade,
+      s.test_date || "25 May, 2026",
+      s.test_name || "Term II Subjective Test - 2",
+      attendanceVal,
+      sstAbs,
+      urduAbs,
+      mathsAbs,
+      englishAbs,
+      scienceAbs,
+      "", // english_languageicse
+      "", // sst_icse
+      200, // total_marks
+      40,  // subject_total_marks
+      totalObtained,
+      pSst !== undefined ? `${pSst}%` : "",
+      pUrdu !== undefined ? `${pUrdu}%` : "",
+      pMaths !== undefined ? `${pMaths}%` : "",
+      pEnglish !== undefined ? `${pEnglish}%` : "",
+      pScience !== undefined ? `${pScience}%` : ""
+    ];
+    lines.push(row.join(","));
+  });
+
+  return lines.join("\n");
+}
+
+/**
+ * Generates formatted CSV for Test Attendance template
+ */
+export function generateAttendanceCSVTemplateString(studentsList: Student[]): string {
+  const headers = ["Student ID", "Student Name", "Test 1 Attendance (Present/Absent)", "Test 2 Attendance (Present/Absent)"];
+  const lines = [headers.join(",")];
+  studentsList.forEach(s => {
+    const row = [
+      s.id,
+      `"${s.name.replace(/"/g, '""')}"`,
+      s.t1_attendance,
+      s.t2_attendance
+    ];
+    lines.push(row.join(","));
+  });
+  return lines.join("\n");
+}
+
+/**
+ * Generates formatted CSV for IOQM Achievement template
+ */
+export function generateIoqmCSVTemplateString(studentsList: Student[]): string {
+  const headers = ["Student ID", "Student Name", "Center Name", "IOQM Score (%)"];
+  const lines = [headers.join(",")];
+  studentsList.forEach(s => {
+    const row = [
+      s.id,
+      `"${s.name.replace(/"/g, '""')}"`,
+      `"${s.center.replace(/"/g, '""')}"`,
+      s.ioqm_score
+    ];
+    lines.push(row.join(","));
+  });
+  return lines.join("\n");
+}
+
+/**
+ * Generates formatted CSV for Ramp Up Test template
+ */
+export function generateRampUpCSVTemplateString(studentsList: Student[]): string {
+  const headers = ["Student ID", "Student Name", "Grade (9 or 10)", "Center Name", "Ramp Up Score (%)"];
+  const lines = [headers.join(",")];
+  studentsList.forEach(s => {
+    const row = [
+      s.id,
+      `"${s.name.replace(/"/g, '""')}"`,
+      s.grade,
+      `"${s.center.replace(/"/g, '""')}"`,
+      s.ramp_up_score !== undefined ? s.ramp_up_score : ""
+    ];
+    lines.push(row.join(","));
+  });
+  return lines.join("\n");
+}
+
+/**
+ * Downloads Test Attendance XLSX Sheet
+ */
+export function downloadAttendanceXLSX(studentsList: Student[], fileName: string) {
+  try {
+    const wb = XLSX.utils.book_new();
+    const headers = ["Student ID", "Student Name", "Test 1 Attendance (Present/Absent)", "Test 2 Attendance (Present/Absent)"];
+    const rows = studentsList.map(s => [
+      s.id,
+      s.name,
+      s.t1_attendance,
+      s.t2_attendance
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 25 }, { wch: 25 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Attendance Ledger");
+    XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
+  } catch (err) {
+    console.error("Attendance XLSX write failed:", err);
+  }
+}
+
+/**
+ * Downloads IOQM XLSX Sheet
+ */
+export function downloadIoqmXLSX(studentsList: Student[], fileName: string) {
+  try {
+    const wb = XLSX.utils.book_new();
+    const headers = ["Student ID", "Student Name", "Center Name", "IOQM Score (%)"];
+    const rows = studentsList.map(s => [
+      s.id,
+      s.name,
+      s.center,
+      s.ioqm_score
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 24 }, { wch: 15 }];
+    XLSX.utils.book_append_sheet(wb, ws, "IOQM Achievement");
+    XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
+  } catch (err) {
+    console.error("IOQM XLSX write failed:", err);
+  }
+}
+
+/**
+ * Downloads Ramp Up XLSX Sheet
+ */
+export function downloadRampUpXLSX(studentsList: Student[], fileName: string) {
+  try {
+    const wb = XLSX.utils.book_new();
+    const headers = ["Student ID", "Student Name", "Grade (9 or 10)", "Center Name", "Ramp Up Score (%)"];
+    const rows = studentsList.map(s => [
+      s.id,
+      s.name,
+      s.grade,
+      s.center,
+      s.ramp_up_score !== undefined ? s.ramp_up_score : ""
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 15 }, { wch: 24 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Ramp Up Scores");
+    XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
+  } catch (err) {
+    console.error("Ramp Up XLSX write failed:", err);
+  }
+}

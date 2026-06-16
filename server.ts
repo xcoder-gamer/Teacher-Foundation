@@ -67,14 +67,14 @@ Simulated improve trajectory if borderline students are coached:
 - National Rank improves from Rank ${scores.rank} to higher.
 
 Your Task:
-Write a highly targeted academic break-down in Hinglish (blend of conversational Hindi and professional English) addressing the center team.
+Write a highly targeted academic break-down in professional, clean English addressing the center team.
 Use these headers:
-### 🔍 Kya Kami Reh Gayi Thi? (Academic Diagnostic)
-- Critically analyse why the Remediation Footprint is dragging the points down and what specific papers needs attention.
+### 🔍 Areas of Improvement & Subject Remediation Footprint
+- Critically analyse why the Remediation Footprint is dragging the points down and what specific papers need attention.
 - Comment on the Borderline Students and why they are our primary target.
 
 ### 🔮 What-If Simulator Insight
-- Motivate the team in Hinglish about the absolute power of pushing borderline students above 40%. Explain that helping these students is the highest-leverage task.
+- Explain to the team in professional English the absolute power of pushing borderline students above 40%. Explain that helping these students is the highest-leverage task.
 ` ;
     } else {
       promptSubject = `
@@ -90,21 +90,21 @@ Weighted components:
 - Student Retention (30% weight): ${scores.studentRetentionScore.toFixed(1)}/100
 
 Your Task:
-Write an overall operational diagnostic in Hinglish (the language PW center teachers speak and understand - direct, objective, supportive yet frank).
+Write an overall operational diagnostic in clean, professional, and objective English.
 Use these headers:
-### ❌ Kahan Maar Kha Gaye? (The Main Rank Leaks)
-- Identify which metric out of the 5 has the biggest score gap compared to perfection (orKota Prime Centre which scores ~94) and explain how this rank leak happened.
-- Speak directly, use Hindi phrases like "Kya kami reh gayi thi" to connect emotionally yet logically on why the rank is low. Keep it professional.
+### ❌ Performance Gaps & Key Optimization Areas
+- Identify which metric out of the 5 has the biggest score gap compared to perfection (or Kota Prime Centre which scores ~94) and explain how this rank leak happened.
+- Speak directly, constructively, and logically on why the rank is low and how to improve. Keep it professional.
 `;
     }
 
     const systemInstruction = `
 You are the intelligent analytical backend diagnostic engine for PW's Read-Only Teacher Analytics Dashboard.
 Your role is to act as an expert academic advisor helping school center leads and teachers optimize their national ranking.
-You speak frankly but supportively in Hinglish (fluent blend of English and key Hindi phrases), explaining why performance was weak (Kya kami reh gayi thi) and how to improve.
+You speak frankly but supportively in clean and professional English, explaining why performance was weak and how to improve.
 Always format your response using professional markdown with headers (###) and clean bullet points.
 Never mention backend execution code, raw formula strings, json, or technical parameters.
-Keep the tone direct, analytical, urgent, yet encouraging.
+Keep the tone direct, analytical, objective, yet encouraging.
 `;
 
     const response = await ai.models.generateContent({

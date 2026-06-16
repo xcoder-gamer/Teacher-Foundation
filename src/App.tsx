@@ -8,15 +8,64 @@ import {
   CenterScores,
 } from "./data";
 import {
-  initAuth,
+  parseSpreadsheetRowsToStudents,
+  generateCSVTemplateString,
+  db,
+  auth,
   googleSignIn,
   logout,
-  fetchSpreadsheetValues,
-  parseGoogleSheetRows,
-  generateCSVTemplateString,
-  extractSpreadsheetId,
 } from "./auth";
-import { downloadStudentsXLSX, parseLocalSpreadsheetFile, fetchPublicSpreadsheet } from "./utils/excel";
+import { onAuthStateChanged } from "firebase/auth";
+import { DailyLedgerImporter } from "./components/DailyLedgerImporter";
+import { collection, getDocs, doc, setDoc, writeBatch, getDoc } from "firebase/firestore";
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+import { downloadStudentsXLSX, parseLocalSpreadsheetFile, downloadRetentionXLSX, downloadResultsXLSX, downloadAttendanceXLSX, downloadIoqmXLSX, downloadRampUpXLSX } from "./utils/excel";
 import {
   Award,
   AlertCircle,
@@ -75,64 +124,185 @@ export default function App() {
   const [aiReport, setAiReport] = useState<string>("");
   const [aiError, setAiError] = useState<string>("");
 
-  // --- GOOGLE SPREADSHEETS INTEGRATION ADDITIONAL STATES ---
-  const [googleUser, setGoogleUser] = useState<any | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [spreadsheetInput, setSpreadsheetInput] = useState<string>("");
-  const [sheetRangeInput, setSheetRangeInput] = useState<string>("Sheet1!A:Z");
-  const [isFetchingSheet, setIsFetchingSheet] = useState<boolean>(false);
-  const [fetchSheetError, setFetchSheetError] = useState<string>("");
+  // --- DAILY LEDGER IMPORT & SYNCHRONIZATION STATES ---
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [importError, setImportError] = useState<string>("");
   const [hasImportedData, setHasImportedData] = useState<boolean>(false);
-  
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [copiedDomain, setCopiedDomain] = useState<boolean>(false);
+  const [selectedUploadMatrix, setSelectedUploadMatrix] = useState<"all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup">("all");
   
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(true);
   const [copiedTemplate, setCopiedTemplate] = useState<boolean>(false);
-  const [copiedCSVProgress, setCopiedCSVProgress] = useState<boolean>(false);
 
-  // Initialize and check saved students from localStorage on start
+  // --- PAGINATION & SEARCH STATES FOR LARGE DATASETS ---
+  const [poolPage, setPoolPage] = useState<number>(1);
+  const [ioqmPage, setIoqmPage] = useState<number>(1);
+  const [rampUpPage, setRampUpPage] = useState<number>(1);
+  const [attendancePage, setAttendancePage] = useState<number>(1);
+  const [retentionPage, setRetentionPage] = useState<number>(1);
+  
+  const [poolSearch, setPoolSearch] = useState<string>("");
+  const [ioqmSearch, setIoqmSearch] = useState<string>("");
+  const [rampUpSearch, setRampUpSearch] = useState<string>("");
+  const [attendanceSearch, setAttendanceSearch] = useState<string>("");
+  const [retentionSearch, setRetentionSearch] = useState<string>("");
+
+  // Reset pagination when active center or tab shifts
   useEffect(() => {
-    const saved = localStorage.getItem("pw_analytics_custom_students");
-    const savedSheetId = localStorage.getItem("pw_analytics_sheet_id");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setStudents(parsed);
-          setHasImportedData(true);
-          
-          // Auto-select the first center from imported list if previous active is missing
-          const centers = Array.from(new Set(parsed.map((s: Student) => s.center)));
-          if (centers.length > 0 && !centers.includes("Lucknow Chowk Centre")) {
-            setSelectedCenterName(centers[0]);
-          }
-        }
-      } catch (e) {
-        console.error("Local data parse error", e);
-      }
-    }
-    if (savedSheetId) {
-      setSpreadsheetInput(savedSheetId);
-    }
+    setPoolPage(1);
+    setIoqmPage(1);
+    setRampUpPage(1);
+    setAttendancePage(1);
+    setRetentionPage(1);
+  }, [selectedCenterName, selectedTab]);
 
-    // Subscribe to Google Firebase OAuth
-    const unsubscribe = initAuth(
-      (user, token) => {
-        setGoogleUser(user);
-        setAuthToken(token);
-      },
-      () => {
-        setGoogleUser(null);
-        setAuthToken(null);
-      }
-    );
+  // --- REAL GOOGLE SHEETS & FIREBASE AUTHENTICATION MECHANISMS ---
+  const [googleUser, setGoogleUser] = useState<any>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState<boolean>(false);
+  const [spreadsheetInput, setSpreadsheetInput] = useState<string>("");
+  const [sheetRangeInput, setSheetRangeInput] = useState<string>("");
+  const [fetchSheetError, setFetchSheetError] = useState<string>("");
+  const [isFetchingSheet, setIsFetchingSheet] = useState<boolean>(false);
+
+  // Monitor Google Authentication session
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setGoogleUser(user);
+    });
     return () => unsubscribe();
   }, []);
 
-  // Clear simulated coaching whenever center changes to avoid state confusion
+  const handleGoogleLogin = async () => {
+    try {
+      setAuthError(null);
+      const res = await googleSignIn();
+      if (res) {
+        setGoogleUser(res.user);
+      }
+    } catch (e: any) {
+      console.error("Google login failed:", e);
+      if (e.code === "auth/unauthorized-domain" || (e.message && e.message.includes("unauthorized-domain"))) {
+        setAuthError("unauthorized-domain");
+      } else {
+        setAuthError(e.message || "Google Sign-In failed.");
+      }
+    }
+  };
+
+  const handleDisconnectGoogle = async () => {
+    try {
+      await logout();
+      setGoogleUser(null);
+    } catch (e) {
+      console.error("Logout failed:", e);
+    }
+  };
+
+  const handleFetchGoogleSheet = () => {
+    setFetchSheetError("Google Sheet direct sync is restricted. Please download as .xlsx or .csv and drag into Step-by-Step Matrix Data Upload instead.");
+  };
+
+  // Check if current authenticated user has administrative database access
+  const isAdmin = googleUser?.email === "sharma.devansh987@gmail.com";
+
+  // Track if initial load from Firebase Firestore is completed
+  const [isInitialLoadDone, setIsInitialLoadDone] = useState<boolean>(false);
+
+  // Initialize and load saved students & active coaching simulation state from Firestore on start
   useEffect(() => {
-    setCoachedStudentIds([]);
+    const fetchInitialData = async () => {
+      try {
+        // 1. Fetch Students from Firestore (High-perf Chunks first with safe legacy fallback)
+        const parsed: Student[] = [];
+        try {
+          const chunkSnapshot = await getDocs(collection(db, "students_chunks"));
+          if (!chunkSnapshot.empty) {
+            const chunks: any[] = [];
+            chunkSnapshot.forEach((docSnap) => {
+              chunks.push(docSnap.data());
+            });
+            chunks.sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+            chunks.forEach((c) => {
+              if (Array.isArray(c.students)) {
+                parsed.push(...c.students);
+              }
+            });
+          }
+        } catch (chunkErr) {
+          console.warn("Could not read students_chunks collection; falling back to legacy.", chunkErr);
+        }
+
+        // Drop down to legacy singular document load if chunks was empty or not found
+        if (parsed.length === 0) {
+          try {
+            const querySnapshot = await getDocs(collection(db, "students"));
+            querySnapshot.forEach((docSnap) => {
+              parsed.push(docSnap.data() as Student);
+            });
+          } catch (e) {
+            handleFirestoreError(e, OperationType.GET, "students");
+            return;
+          }
+        }
+
+        if (parsed.length > 0) {
+          setStudents(parsed);
+          setHasImportedData(true);
+        }
+
+        // 2. Fetch Active Coaching/Simulation State from Firestore
+        let coachingDoc;
+        try {
+          coachingDoc = await getDoc(doc(db, "coaching", "current"));
+        } catch (e) {
+          handleFirestoreError(e, OperationType.GET, "coaching/current");
+          return;
+        }
+
+        if (coachingDoc.exists()) {
+          const coachingData = coachingDoc.data();
+          if (coachingData.coachedStudentIds) {
+            setCoachedStudentIds(coachingData.coachedStudentIds);
+          }
+          if (coachingData.selectedCenterName) {
+            setSelectedCenterName(coachingData.selectedCenterName);
+          }
+        }
+      } catch (e) {
+        console.error("Firestore initial data load error", e);
+      } finally {
+        setIsInitialLoadDone(true);
+      }
+    };
+
+    fetchInitialData();
+  }, []);
+
+  // Auto-persist coaching list & selected center to Firestore on updates to keep sessions persistent
+  useEffect(() => {
+    if (!isInitialLoadDone) return;
+    
+    const persistCoaching = async () => {
+      try {
+        await setDoc(doc(db, "coaching", "current"), {
+          coachedStudentIds,
+          selectedCenterName,
+          updatedAt: new Date().toISOString()
+        });
+      } catch (err) {
+        try {
+          handleFirestoreError(err, OperationType.WRITE, "coaching/current");
+        } catch (wrappedErr) {
+          console.error("Failed to persist coaching selections to Firestore", wrappedErr);
+        }
+      }
+    };
+
+    persistCoaching();
+  }, [coachedStudentIds, selectedCenterName, isInitialLoadDone]);
+
+  // Clear simulated AI reports on center transitions so users see fresh relevant analysis
+  useEffect(() => {
     setAiReport("");
     setAiError("");
   }, [selectedCenterName]);
@@ -198,10 +368,45 @@ export default function App() {
     return getRankedCenters(simulatedStudents);
   }, [simulatedStudents]);
 
+  // Safe Empty Center Standard
+  const emptyCenterScores = useMemo(() => ({
+    centerName: "No Active Centers",
+    activeStudents: 0,
+    rank: 1,
+    subjectiveTestScore: 0,
+    elementA_percent: 0,
+    elementA_score: 0,
+    elementB_percent: 0,
+    elementB_score: 0,
+    testAttendanceScore: 0,
+    attendance_percent: 0,
+    ioqmScore: 0,
+    ioqm_percent: 0,
+    rampUpScore: 0,
+    rampUp_percent: 0,
+    studentRetentionScore: 0,
+    retention_percent: 0,
+    consolidatedScore: 0
+  }), []);
+
+  const nationalCombinedMetrics = useMemo(() => {
+    return calculateCenterMetrics("All Centers Combined", simulatedStudents);
+  }, [simulatedStudents]);
+
+  const nationalBaselineMetrics = useMemo(() => {
+    return calculateCenterMetrics("All Centers Combined", students);
+  }, [students]);
+
   // Find the currently selected center's simulated and default scores
   const selectedCenterScores = useMemo(() => {
-    return rankedCenters.find((c) => c.centerName === selectedCenterName) || rankedCenters[0];
-  }, [rankedCenters, selectedCenterName]);
+    if (selectedCenterName === "All Centers Combined") {
+      return {
+        ...nationalCombinedMetrics,
+        rank: 0,
+      } as CenterScores;
+    }
+    return rankedCenters.find((c) => c.centerName === selectedCenterName) || rankedCenters[0] || emptyCenterScores;
+  }, [rankedCenters, selectedCenterName, simulatedStudents, emptyCenterScores]);
 
   // Get raw baseline scores (without simulation) to compare
   const baselineCenters = useMemo(() => {
@@ -209,12 +414,18 @@ export default function App() {
   }, [students]);
 
   const selectedCenterBaseline = useMemo(() => {
-    return baselineCenters.find((c) => c.centerName === selectedCenterName) || baselineCenters[0];
-  }, [baselineCenters, selectedCenterName]);
+    if (selectedCenterName === "All Centers Combined") {
+      return {
+        ...nationalBaselineMetrics,
+        rank: 0,
+      } as CenterScores;
+    }
+    return baselineCenters.find((c) => c.centerName === selectedCenterName) || baselineCenters[0] || emptyCenterScores;
+  }, [baselineCenters, selectedCenterName, nationalBaselineMetrics, emptyCenterScores]);
 
   // --- TARGET STUDENT LIST (Lucknow specific borderline students) ---
   const currentCenterBorderlineStudents = useMemo(() => {
-    const centerStudents = students.filter((s) => s.center === selectedCenterName);
+    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter((s) => s.center === selectedCenterName);
     
     // Filter out double absent students
     const active = centerStudents.filter(
@@ -303,9 +514,96 @@ export default function App() {
     }
   }, [rankedCenters, leaderboardMetric, subjectiveRanked, ioqmRanked, rampUpRanked, attendanceRanked, retentionRanked]);
 
+  // --- NATIONAL CENTER LEADERBOARD SORTING ENGINE ---
+  const [centerSortField, setCenterSortField] = useState<string>("rank");
+  const [centerSortAsc, setCenterSortAsc] = useState<boolean>(true);
+
+  const sortedRankedCenters = useMemo(() => {
+    return [...rankedCenters].sort((a, b) => {
+      let valA: any;
+      let valB: any;
+      if (centerSortField === "rank") {
+        valA = a.rank;
+        valB = b.rank;
+      } else if (centerSortField === "centerName") {
+        valA = a.centerName;
+        valB = b.centerName;
+      } else if (centerSortField === "consolidatedScore") {
+        valA = a.consolidatedScore;
+        valB = b.consolidatedScore;
+      } else if (centerSortField === "subjective") {
+        valA = a.subjectiveTestScore;
+        valB = b.subjectiveTestScore;
+      } else if (centerSortField === "ioqm") {
+        valA = a.ioqmScore;
+        valB = b.ioqmScore;
+      } else if (centerSortField === "rampUp") {
+        valA = a.rampUpScore;
+        valB = b.rampUpScore;
+      } else if (centerSortField === "attendance") {
+        valA = a.testAttendanceScore;
+        valB = b.testAttendanceScore;
+      } else if (centerSortField === "retention") {
+        valA = a.studentRetentionScore;
+        valB = b.studentRetentionScore;
+      }
+
+      if (valA === undefined) return 1;
+      if (valB === undefined) return -1;
+      if (typeof valA === "string") {
+        return centerSortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      }
+      return centerSortAsc ? valA - valB : valB - valA;
+    });
+  }, [rankedCenters, centerSortField, centerSortAsc]);
+
+  // --- LOCAL EVALUATION STUDENT POOL SORTING ENGINE ---
+  const [studentSortField, setStudentSortField] = useState<string>("name");
+  const [studentSortAsc, setStudentSortAsc] = useState<boolean>(true);
+
+  const sortedSelectedCenterStudents = useMemo(() => {
+    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter(s => s.center === selectedCenterName);
+    return [...centerStudents].sort((a, b) => {
+      let valA: any;
+      let valB: any;
+      
+      if (studentSortField === "name") {
+        valA = a.name;
+        valB = b.name;
+      } else if (studentSortField === "id") {
+        valA = a.id;
+        valB = b.id;
+      } else if (studentSortField === "grade") {
+        valA = parseInt(a.grade) || 0;
+        valB = parseInt(b.grade) || 0;
+      } else if (studentSortField === "averageScore") {
+        const perfA = getStudentPerformance(a);
+        const perfB = getStudentPerformance(b);
+        valA = perfA.isActive && perfA.averagePercent !== null ? perfA.averagePercent : -1;
+        valB = perfB.isActive && perfB.averagePercent !== null ? perfB.averagePercent : -1;
+      } else if (studentSortField === "retained") {
+        valA = a.retained ? 1 : 0;
+        valB = b.retained ? 1 : 0;
+      } else if (studentSortField === "t1_attendance") {
+        valA = a.t1_attendance;
+        valB = b.t1_attendance;
+      } else if (studentSortField === "t2_attendance") {
+        valA = a.t2_attendance;
+        valB = b.t2_attendance;
+      }
+      
+      if (valA === undefined) return 1;
+      if (valB === undefined) return -1;
+      if (typeof valA === "string") {
+        return studentSortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      }
+      return studentSortAsc ? valA - valB : valB - valA;
+    });
+  }, [students, selectedCenterName, studentSortField, studentSortAsc]);
+
   // Priority Action Items for the Selected Center and Metric Focus
   const actionablePlan = useMemo(() => {
-    const centerStudents = students.filter((s) => s.center === selectedCenterName);
+    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter((s) => s.center === selectedCenterName);
     const activeStudents = centerStudents.filter(
       (s) => s.t1_attendance === "Present" || s.t2_attendance === "Present"
     );
@@ -424,6 +722,101 @@ export default function App() {
     };
   }, [students, selectedCenterName, coachedStudentIds]);
 
+  // --- CLIENT-SIDE PAGINATOR & SEARCH ENGINE FOR LARGE LIST RENDERING PERFORMANCE ---
+  const filteredAndSortedPoolStudents = useMemo(() => {
+    const searchClean = poolSearch.trim().toLowerCase();
+    let res = sortedSelectedCenterStudents;
+    if (searchClean) {
+      res = res.filter(
+        (s) => s.name.toLowerCase().includes(searchClean) || s.id.toLowerCase().includes(searchClean)
+      );
+    }
+    return res;
+  }, [sortedSelectedCenterStudents, poolSearch]);
+
+  const poolPageSize = 25;
+  const poolTotalPages = Math.max(1, Math.ceil(filteredAndSortedPoolStudents.length / poolPageSize));
+  const paginatedPoolStudents = useMemo(() => {
+    const start = (poolPage - 1) * poolPageSize;
+    return filteredAndSortedPoolStudents.slice(start, start + poolPageSize);
+  }, [filteredAndSortedPoolStudents, poolPage]);
+
+  // IOQM pagination
+  const filteredIoqmItems = useMemo(() => {
+    const searchClean = ioqmSearch.trim().toLowerCase();
+    let res = actionablePlan.ioqmItems;
+    if (searchClean) {
+      res = res.filter(
+        (item) => item.student.name.toLowerCase().includes(searchClean) || item.student.id.toLowerCase().includes(searchClean)
+      );
+    }
+    return res;
+  }, [actionablePlan.ioqmItems, ioqmSearch]);
+
+  const ioqmPageSize = 15;
+  const ioqmTotalPages = Math.max(1, Math.ceil(filteredIoqmItems.length / ioqmPageSize));
+  const paginatedIoqmItems = useMemo(() => {
+    const start = (ioqmPage - 1) * ioqmPageSize;
+    return filteredIoqmItems.slice(start, start + ioqmPageSize);
+  }, [filteredIoqmItems, ioqmPage]);
+
+  // Ramp Up pagination
+  const filteredRampUpItems = useMemo(() => {
+    const searchClean = rampUpSearch.trim().toLowerCase();
+    let res = actionablePlan.rampUpItems;
+    if (searchClean) {
+      res = res.filter(
+        (item) => item.student.name.toLowerCase().includes(searchClean) || item.student.id.toLowerCase().includes(searchClean)
+      );
+    }
+    return res;
+  }, [actionablePlan.rampUpItems, rampUpSearch]);
+
+  const rampUpPageSize = 15;
+  const rampUpTotalPages = Math.max(1, Math.ceil(filteredRampUpItems.length / rampUpPageSize));
+  const paginatedRampUpItems = useMemo(() => {
+    const start = (rampUpPage - 1) * rampUpPageSize;
+    return filteredRampUpItems.slice(start, start + rampUpPageSize);
+  }, [filteredRampUpItems, rampUpPage]);
+
+  // Attendance/Absentees pagination
+  const filteredAbsenteeItems = useMemo(() => {
+    const searchClean = attendanceSearch.trim().toLowerCase();
+    let res = actionablePlan.absentees;
+    if (searchClean) {
+      res = res.filter(
+        (item) => item.student.name.toLowerCase().includes(searchClean) || item.student.id.toLowerCase().includes(searchClean)
+      );
+    }
+    return res;
+  }, [actionablePlan.absentees, attendanceSearch]);
+
+  const attendancePageSize = 15;
+  const attendanceTotalPages = Math.max(1, Math.ceil(filteredAbsenteeItems.length / attendancePageSize));
+  const paginatedAbsenteeItems = useMemo(() => {
+    const start = (attendancePage - 1) * attendancePageSize;
+    return filteredAbsenteeItems.slice(start, start + attendancePageSize);
+  }, [filteredAbsenteeItems, attendancePage]);
+
+  // Retention pagination
+  const filteredRetentionItems = useMemo(() => {
+    const searchClean = retentionSearch.trim().toLowerCase();
+    let res = actionablePlan.retentionItems;
+    if (searchClean) {
+      res = res.filter(
+        (item) => item.student.name.toLowerCase().includes(searchClean) || item.student.id.toLowerCase().includes(searchClean)
+      );
+    }
+    return res;
+  }, [actionablePlan.retentionItems, retentionSearch]);
+
+  const retentionPageSize = 15;
+  const retentionTotalPages = Math.max(1, Math.ceil(filteredRetentionItems.length / retentionPageSize));
+  const paginatedRetentionItems = useMemo(() => {
+    const start = (retentionPage - 1) * retentionPageSize;
+    return filteredRetentionItems.slice(start, start + retentionPageSize);
+  }, [filteredRetentionItems, retentionPage]);
+
   // --- MASS SIMULATION TRIGGERS ---
   const handleApplyPresetTier1 = () => {
     // Coach exactly 6 borderline students (all 6)
@@ -434,7 +827,7 @@ export default function App() {
 
   const handleApplyPresetTier2 = () => {
     // Coach ALL students with any failing papers in the center to 45%
-    const centerStudents = students.filter((s) => s.center === selectedCenterName);
+    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter((s) => s.center === selectedCenterName);
     const activeWithFailures = centerStudents.filter((s) => {
       const perf = getStudentPerformance(s);
       return perf.isActive && perf.failingPapersCount > 0;
@@ -493,109 +886,57 @@ export default function App() {
     setAiReport("");
   };
 
-  // --- GOOGLE SPREADSHEET HANDLERS ---
-  const handleGoogleLogin = async () => {
+  // --- DYNAMIC VIEW EXPORT HANDLERS ---
+  const handleExportLeaderboardCSV = () => {
     try {
-      setFetchSheetError("");
-      setAuthError(null);
-      const res = await googleSignIn();
-      if (res) {
-        setGoogleUser(res.user);
-        setAuthToken(res.accessToken);
-      }
-    } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      console.error("Sign-in failed with error status:", err);
-      if (errMsg.includes("unauthorized-domain") || errMsg.includes("auth/unauthorized-domain")) {
-        setAuthError("unauthorized-domain");
-      } else {
-        setAuthError(errMsg);
-      }
-      setFetchSheetError(`Google authentication failed: ${errMsg}`);
+      let headers = "Rank,Center Hub,Consolidated Score,Subjective (25%),IOQM (20%),Ramp Up (15%),Test Attendance (10%),Student Retention (30%)\n";
+      let rows = sortedRankedCenters.map(item => 
+        `"${item.rank}","${item.centerName}","${item.consolidatedScore.toFixed(1)}","${item.subjectiveTestScore.toFixed(1)}","${item.ioqmScore.toFixed(1)}","${item.rampUpScore.toFixed(1)}","${item.testAttendanceScore.toFixed(1)}","${item.studentRetentionScore.toFixed(1)}"`
+      ).join("\n");
+      const csvContent = headers + rows;
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `pw_national_center_leaderboard.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      console.error("Leaderboard CSV export failed", e);
     }
   };
 
-  const handleDisconnectGoogle = async () => {
+  const handleExportStudentPoolCSV = () => {
     try {
-      await logout();
-      setGoogleUser(null);
-      setAuthToken(null);
-    } catch (err: any) {
-      console.error("Disconnect error", err);
+      const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter(s => s.center === selectedCenterName);
+      let headers = "Student Name,Registration ID,Center,Grade,T1 Attendance,T2 Attendance,Evaluated Average,Retention Status\n";
+      let rows = centerStudents.map(student => {
+        const perf = getStudentPerformance(student);
+        const isRetained = student.retained ? "Retained" : "Defaulter / Left";
+        const isT1Present = student.t1_attendance === "Present" ? "Present" : "Absent";
+        const isT2Present = student.t2_attendance === "Present" ? "Present" : "Absent";
+        const avgScore = perf.isActive && perf.averagePercent !== null ? `${perf.averagePercent.toFixed(1)}%` : "N/A (Double Absent)";
+        return `"${student.name}","${student.id}","${student.center}","${student.grade}","${isT1Present}","${isT2Present}","${avgScore}","${isRetained}"`;
+      }).join("\n");
+      const csvContent = headers + rows;
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${selectedCenterName.replace(/\s+/g, "_")}_student_directory.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      console.error("Student pool export failed", e);
     }
   };
 
-  const handleFetchGoogleSheet = async () => {
-    if (!spreadsheetInput) {
-      setFetchSheetError("Please enter a Google Spreadsheet URL or Spreadsheet ID.");
-      return;
-    }
-
-    setIsFetchingSheet(true);
-    setFetchSheetError("");
-
-    try {
-      const sheetId = extractSpreadsheetId(spreadsheetInput);
-      if (!sheetId) throw new Error("Could not extract a valid spreadsheet ID from your input.");
-
-      let rows: any[][] | null = null;
-
-      // Always attempt a direct public sheet fetch first, as it completely bypasses API limits,
-      // OAuth steps, and console configuration - providing a seamless "zero login" user experience!
-      try {
-        console.log("Attempting direct public bypass fetch...");
-        rows = await fetchPublicSpreadsheet(sheetId);
-      } catch (publicErr: any) {
-        console.warn("Direct public fetch failed, checking authenticated fallback...", publicErr);
-        
-        // If the sheet isn't public, and we have authorized, attempt standard Sheets API query
-        if (authToken) {
-          rows = await fetchSpreadsheetValues(sheetId, sheetRangeInput, authToken);
-        } else {
-          // No user session is connected, and public fetch failed. Give a highly informative error!
-          throw new Error(
-            `${publicErr.message || "Failed to read sheet."}\n\n` + 
-            "💡 Pro-Tip: Google Sheets only allows view-only direct fetch when shared! " +
-            "Please open your Google Sheet, click 'Share' in the top right, change the General access status to 'Anyone with the link can view' (Viewer mode), and click Sync again!\n\n" +
-            "Alternatively, click 'Connect Google Session' under Option A to authorize accessing a private spreadsheet."
-          );
-        }
-      }
-
-      if (!rows || rows.length < 2) {
-        throw new Error("No data returned, or empty sheet. Make sure Sheet name and rows exist.");
-      }
-
-      const parsedStudents = parseGoogleSheetRows(rows);
-      if (parsedStudents.length === 0) {
-        throw new Error("No student records could be parsed. Check column headers.");
-      }
-
-      // Save to React State
-      setStudents(parsedStudents);
-      setHasImportedData(true);
-      setCoachedStudentIds([]);
-      setAiReport("");
-      setAiError("");
-
-      // Save to localStorage
-      localStorage.setItem("pw_analytics_custom_students", JSON.stringify(parsedStudents));
-      localStorage.setItem("pw_analytics_sheet_id", spreadsheetInput);
-
-      // Auto-set selected center if previous center not found in current list
-      const centers = Array.from(new Set(parsedStudents.map(s => s.center)));
-      if (centers.length > 0 && !centers.includes(selectedCenterName)) {
-        setSelectedCenterName(centers[0]);
-      }
-    } catch (err: any) {
-      console.error("Fetch Google Sheet error:", err);
-      setFetchSheetError(err.message || "Failed to fetch spreadsheet. Confirm spreadsheet link or permissions.");
-    } finally {
-      setIsFetchingSheet(false);
-    }
-  };
-
-  const handleResetToDefaultDemo = () => {
+  // --- DAILY LEDGER HANDLERS ---
+  const handleResetToDefaultDemo = async () => {
     const confirmReset = window.confirm("Are you sure you want to restore the default pre-loaded Physics Wallah centers demo dataset?");
     if (!confirmReset) return;
 
@@ -606,8 +947,80 @@ export default function App() {
     setAiError("");
     setSelectedCenterName("Lucknow Chowk Centre");
 
-    localStorage.removeItem("pw_analytics_custom_students");
-    localStorage.removeItem("pw_analytics_sheet_id");
+    // Clear Firestore student collections (both chunks and legacy singulars) safely
+    try {
+      // 1. Wipe students_chunks collection
+      const chunksSnap = await getDocs(collection(db, "students_chunks"));
+      const chunkBatch = writeBatch(db);
+      chunksSnap.docs.forEach((docSnap) => {
+        chunkBatch.delete(docSnap.ref);
+      });
+      await chunkBatch.commit();
+
+      // 2. Wipe legacy students collection in 400-doc sub-batches
+      const qSnap = await getDocs(collection(db, "students"));
+      let batch = writeBatch(db);
+      let count = 0;
+      for (const docSnap of qSnap.docs) {
+        batch.delete(docSnap.ref);
+        count++;
+        if (count >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+    } catch (writeErr) {
+      handleFirestoreError(writeErr, OperationType.DELETE, "students_chunks");
+    }
+  };
+
+  const handleWipeAllData = async () => {
+    const confirmWipe = window.confirm(
+      "☢️ WARNING: Are you absolutely sure you want to wipe all student records? This will clear the database so you can import custom live data."
+    );
+    if (!confirmWipe) return;
+
+    setStudents([]);
+    setHasImportedData(true); // Treat as imported setup so general demo alerts don't conflict
+    setCoachedStudentIds([]);
+    setAiReport("");
+    setAiError("");
+    setSelectedCenterName("");
+
+    // Clear Firestore student collections (both chunks and legacy singulars) safely
+    try {
+      // 1. Wipe students_chunks collection
+      const chunksSnap = await getDocs(collection(db, "students_chunks"));
+      const chunkBatch = writeBatch(db);
+      chunksSnap.docs.forEach((docSnap) => {
+        chunkBatch.delete(docSnap.ref);
+      });
+      await chunkBatch.commit();
+
+      // 2. Wipe legacy students collection in 400-doc sub-batches
+      const qSnap = await getDocs(collection(db, "students"));
+      let batch = writeBatch(db);
+      let count = 0;
+      for (const docSnap of qSnap.docs) {
+        batch.delete(docSnap.ref);
+        count++;
+        if (count >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+      alert("🧹 Clean slate initialized! Database cleared. You can now upload your custom live spreadsheets.");
+    } catch (writeErr) {
+      handleFirestoreError(writeErr, OperationType.DELETE, "students_chunks");
+    }
   };
 
   const handleCopyTemplateCSV = () => {
@@ -654,6 +1067,46 @@ export default function App() {
     }
   };
 
+  const handleDownloadRetentionXLSX = () => {
+    try {
+      downloadRetentionXLSX(students, "pw_active_retention_ledger_format1.xlsx");
+    } catch (e) {
+      console.error("Retention XLSX download failed:", e);
+    }
+  };
+
+  const handleDownloadResultsXLSX = () => {
+    try {
+      downloadResultsXLSX(students, "pw_active_results_ledger_format2.xlsx");
+    } catch (e) {
+      console.error("Results XLSX download failed:", e);
+    }
+  };
+
+  const handleDownloadAttendanceXLSX = () => {
+    try {
+      downloadAttendanceXLSX(students, "pw_active_attendance_ledger.xlsx");
+    } catch (e) {
+      console.error("Attendance XLSX download failed:", e);
+    }
+  };
+
+  const handleDownloadIoqmXLSX = () => {
+    try {
+      downloadIoqmXLSX(students, "pw_active_ioqm_ledger.xlsx");
+    } catch (e) {
+      console.error("IOQM XLSX download failed:", e);
+    }
+  };
+
+  const handleDownloadRampUpXLSX = () => {
+    try {
+      downloadRampUpXLSX(students, "pw_active_rampup_ledger.xlsx");
+    } catch (e) {
+      console.error("Ramp Up XLSX download failed:", e);
+    }
+  };
+
   const [dragActive, setDragActive] = useState<boolean>(false);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -683,15 +1136,15 @@ export default function App() {
 
   const handleParseLocalSpreadsheet = async (file: File) => {
     try {
-      setFetchSheetError("");
-      setIsFetchingSheet(true);
+      setImportError("");
+      setIsImporting(true);
       const rows = await parseLocalSpreadsheetFile(file);
       
       if (!rows || rows.length < 2) {
         throw new Error("The selected file is empty or missing headers.");
       }
 
-      const parsedStudents = parseGoogleSheetRows(rows);
+      const parsedStudents = parseSpreadsheetRowsToStudents(rows, students, selectedUploadMatrix);
       if (parsedStudents.length === 0) {
         throw new Error("Could not extract any valid student records. Check column header spellings.");
       }
@@ -702,7 +1155,67 @@ export default function App() {
       setAiReport("");
       setAiError("");
 
-      localStorage.setItem("pw_analytics_custom_students", JSON.stringify(parsedStudents));
+      // Save to Firestore using high-performance chunked collection
+      try {
+        // Step 1: Wipe all existing students chunks and legacy individual docs safely
+        const chunksSnap = await getDocs(collection(db, "students_chunks"));
+        const chunkBatch = writeBatch(db);
+        chunksSnap.docs.forEach((docSnap) => {
+          chunkBatch.delete(docSnap.ref);
+        });
+        await chunkBatch.commit();
+
+        const qSnap = await getDocs(collection(db, "students"));
+        let legacyBatch = writeBatch(db);
+        let delCount = 0;
+        for (const docSnap of qSnap.docs) {
+          legacyBatch.delete(docSnap.ref);
+          delCount++;
+          if (delCount >= 400) {
+            await legacyBatch.commit();
+            legacyBatch = writeBatch(db);
+            delCount = 0;
+          }
+        }
+        if (delCount > 0) {
+          await legacyBatch.commit();
+        }
+        
+        // Step 2: Clean and chunk data for Firestore to bypass any batch size/network payload limits
+        const cleanDataForFirestore = (obj: any): any => {
+          if (obj === undefined) return null;
+          if (obj === null) return null;
+          if (Array.isArray(obj)) {
+            return obj.map(cleanDataForFirestore);
+          }
+          if (typeof obj === "object") {
+            const cleaned: any = {};
+            for (const key of Object.keys(obj)) {
+              const val = obj[key];
+              if (val !== undefined) {
+                cleaned[key] = cleanDataForFirestore(val);
+              }
+            }
+            return cleaned;
+          }
+          return obj;
+        };
+
+        const CHUNK_SIZE = 1000;
+        const totalCount = parsedStudents.length;
+
+        for (let idx = 0; idx < totalCount; idx += CHUNK_SIZE) {
+          const chunk = parsedStudents.slice(idx, idx + CHUNK_SIZE).map(cleanDataForFirestore);
+          const chunkIndex = Math.floor(idx / CHUNK_SIZE);
+          await setDoc(doc(db, "students_chunks", `chunk_${chunkIndex}`), {
+            chunkIndex,
+            students: chunk,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      } catch (writeErr) {
+        handleFirestoreError(writeErr, OperationType.WRITE, "students_chunks");
+      }
 
       const centers = Array.from(new Set(parsedStudents.map(s => s.center)));
       if (centers.length > 0 && !centers.includes(selectedCenterName)) {
@@ -710,9 +1223,9 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Local spreadsheet import failed:", err);
-      setFetchSheetError(`Spreadsheet failure: ${err.message || err}`);
+      setImportError(`Spreadsheet failure: ${err.message || err}`);
     } finally {
-      setIsFetchingSheet(false);
+      setIsImporting(false);
     }
   };
 
@@ -832,7 +1345,39 @@ export default function App() {
         <section className={`lg:col-span-12 bg-slate-900 border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-300 ${
           hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-800"
         }`} id="google-sheets-widget">
-          {/* Subtle background visual glows */}
+          <DailyLedgerImporter
+            students={students}
+            hasImportedData={hasImportedData}
+            isImporting={isImporting}
+            importError={importError}
+            dragActive={dragActive}
+            showTemplateModal={showTemplateModal}
+            copiedTemplate={copiedTemplate}
+            handleResetToDefaultDemo={handleResetToDefaultDemo}
+            handleWipeAllData={handleWipeAllData}
+            handleCopyTemplateCSV={handleCopyTemplateCSV}
+            handleDownloadSampleCSV={handleDownloadSampleCSV}
+            handleDownloadActiveXLSX={handleDownloadActiveXLSX}
+            handleDownloadRetentionXLSX={handleDownloadRetentionXLSX}
+            handleDownloadResultsXLSX={handleDownloadResultsXLSX}
+            handleDownloadAttendanceXLSX={handleDownloadAttendanceXLSX}
+            handleDownloadIoqmXLSX={handleDownloadIoqmXLSX}
+            handleDownloadRampUpXLSX={handleDownloadRampUpXLSX}
+            selectedUploadMatrix={selectedUploadMatrix}
+            setSelectedUploadMatrix={setSelectedUploadMatrix}
+            handleDrag={handleDrag}
+            handleDrop={handleDrop}
+            handleFileChange={handleFileChange}
+            setShowTemplateModal={setShowTemplateModal}
+            isAdmin={isAdmin}
+            googleUser={googleUser}
+            handleGoogleLogin={handleGoogleLogin}
+          />
+        </section>
+
+        {false && (
+          <section id="old-google-sheets-widget">
+            {/* Subtle background visual glows */}
           <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
           
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-4">
@@ -1335,51 +1880,51 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Data Type Descriptions in simple Hinglish */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" id="hinglish-data-type-guide">
+              {/* Data Type Descriptions in simple English */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" id="english-data-type-guide">
                 <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-1.5 shadow-sm">
                   <div className="text-[12px] font-bold text-yellow-400 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-yellow-400 block" />
-                    1. Classes & Centers (बेसिक जानकारी)
+                    1. Classes & Centers (Basic Information)
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                    <strong>Student ID:</strong> Yeh unique roll number ya registration code ha.
-                    <br /><strong>Grade:</strong> Sheet me strictly <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">9</code>, <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">10</code>, <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">11</code>, ya <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">12</code> hi daalein.
-                    <br /><strong>Center Name:</strong> Branch name likhein (eg: Lucknow Chowk Centre).
+                    <strong>Student ID:</strong> This is a unique roll number or registration code.
+                    <br /><strong>Grade:</strong> The sheet must strictly contain <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">9</code>, <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">10</code>, <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">11</code>, or <code className="text-yellow-400 bg-slate-950 px-1 py-0.5 rounded font-mono">12</code>.
+                    <br /><strong>Center Name:</strong> Write the branch name exactly (e.g., Lucknow Chowk Centre).
                   </p>
                 </div>
 
                 <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-1.5 shadow-sm border-emerald-500/10">
                   <div className="text-[12px] font-bold text-emerald-400 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 block" />
-                    2. Attendance (हाजिरी का टाइप)
+                    2. Attendance (Attendance Type)
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                    <strong>Test 1 & Test 2 Attendance:</strong> Columns me strictly <code className="text-emerald-400 font-mono bg-slate-950 px-1 rounded">Present</code> ya <code className="text-rose-400 font-mono bg-slate-950 px-1 rounded">Absent</code> hi likhein.
-                    <br /><em className="text-slate-400 text-[10px]">Note: Dono tests me Absent hone par metric denominator se exclude ho jata hai.</em>
+                    <strong>Test 1 & Test 2 Attendance:</strong> Columns must strictly contain <code className="text-emerald-400 font-mono bg-slate-950 px-1 rounded">Present</code> or <code className="text-rose-400 font-mono bg-slate-950 px-1 rounded">Absent</code>.
+                    <br /><em className="text-slate-400 text-[10px]">Note: Students marked Absent for both tests are completely excluded from the metric's denominator.</em>
                   </p>
                 </div>
 
                 <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-1.5 shadow-sm border-cyan-500/10">
                   <div className="text-[12px] font-bold text-cyan-400 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-cyan-400 block" />
-                    3. Marks / Percentage (अंकों का टाइप)
+                    3. Marks / Percentage (Score Formats)
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                    <strong>Physics, Chem, Maths marks:</strong> Scores me <code className="text-cyan-400 font-mono bg-slate-950 px-1 rounded">0 se 100</code> ke bich numbers daalein.
-                    <br /><strong>Khali (Blank) kab chhodna hai?</strong> Agar kisi test me attendance <code className="text-rose-400">Absent</code> hai, tab us test ke scores ko blank (empty) chhod dein!
+                    <strong>Physics, Chemistry, Maths marks:</strong> Set numeric scores between <code className="text-cyan-400 font-mono bg-slate-950 px-1 rounded">0 and 100</code>.
+                    <br /><strong>When to leave blank?</strong> If test attendance is marked as <code className="text-rose-450">Absent</code>, leave these score fields completely blank!
                   </p>
                 </div>
 
                 <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 space-y-1.5 shadow-sm border-purple-500/10">
                   <div className="text-[12px] font-bold text-purple-400 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-purple-400 block" />
-                    4. Other Marks & Retention (बाकी नियम)
+                    4. Other Marks & Retention (General Rules)
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                    <strong>IOQM Score / Ramp Up:</strong> <code className="text-purple-400 font-mono bg-slate-950 px-1 rounded">0-100</code> percent marks.
-                    <br /><strong>Ramp Up:</strong> 9th/10th ke liye optional marks, 11th/12th ke liye isko blank rakhein.
-                    <br /><strong>Retained Status:</strong> Strictly <code className="text-purple-400 bg-slate-950 px-1 rounded font-mono">Yes</code> ya <code className="text-purple-400 bg-slate-950 px-1 rounded font-mono">No</code> bharein.
+                    <strong>IOQM Score / Ramp Up:</strong> Metric range between <code className="text-purple-400 font-mono bg-slate-950 px-1 rounded">0 and 100</code> percentage marks.
+                    <br /><strong>Ramp Up:</strong> Optional marks for 9th and 10th graders; leave completely blank for 11th and 12th graders.
+                    <br /><strong>Retained Status:</strong> Strictly specify <code className="text-purple-400 bg-slate-950 px-1 rounded font-mono">Yes</code> or <code className="text-purple-400 bg-slate-950 px-1 rounded font-mono">No</code>.
                   </p>
                 </div>
               </div>
@@ -1387,7 +1932,7 @@ export default function App() {
               {/* Step instructions */}
               <div className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg p-4 text-slate-400 font-mono space-y-2">
                 <div className="text-slate-200 font-bold flex items-center justify-between border-b border-slate-800/80 pb-1.5">
-                  <span className="flex items-center gap-1.5">⚡ Google Sheets Main Data Import Karne Ka Tarika:</span>
+                  <span className="flex items-center gap-1.5">⚡ Directions for Importing Main Google Sheets Data:</span>
                   {spreadsheetInput && (
                     <a
                       href={spreadsheetInput.startsWith("http") ? spreadsheetInput : `https://docs.google.com/spreadsheets/d/${spreadsheetInput}`}
@@ -1400,16 +1945,17 @@ export default function App() {
                   )}
                 </div>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-300 font-sans">
-                  <li>Niche diye gye **"Download Mock Data Table"** button par click karke actual files save karein.</li>
-                  <li>Google Drive par ek naya Spreadsheet kholin aur pehle cell (**A1**) par click karein.</li>
-                  <li>Sheet me **File &rarr; Import** par click karein aur download ki gayi CSV file ko upload karein.</li>
-                  <li>Apne Google Sheet ke top-right **Share** button par click karein aur share status change karke **"Anyone with the link can view" (Koi bhi link se dekh sake)** select karein taaki dashboard use access kar sake!</li>
-                  <li>Spreadsheet ka public link copy karein aur upar dashboard connection input me paste karke **"Fetch & Sync Student Ledger"** click karein!</li>
+                  <li>Click the **"Download Mock Data Table"** button below to download the CSV mock template structure.</li>
+                  <li>Open a new spreadsheet file on Google Drive and click on the first cell (**A1**).</li>
+                  <li>Click **File &rarr; Import** inside your Google Sheet interface and upload the downloaded CSV file.</li>
+                  <li>Click the **Share** button in the top-right corner of Google Sheets. Set the sharing status to **"Anyone with the link can view"** so the dashboard can access the data.</li>
+                  <li>Copy the public URL of your Google Sheet, paste it in the connection input field above, and click **"Fetch & Sync Student Ledger"**!</li>
                 </ol>
               </div>
             </div>
           )}
         </section>
+        )}
 
         {/* 2. LEFT PANEL: ALL CENTERS LEADERBOARD PROGRESS */}
         <section className="lg:col-span-4 space-y-4" id="leaderboard-section">
@@ -1494,6 +2040,83 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
+              {/* National Combined / Global View Card */}
+              {(() => {
+                let nationalScoreVal = 0;
+                let nationalScoreLabel = "Overall";
+                let nationalScoreColorClass = "text-yellow-400";
+                
+                if (leaderboardMetric === "combined") {
+                  nationalScoreVal = nationalCombinedMetrics.consolidatedScore;
+                  nationalScoreLabel = "Overall";
+                  nationalScoreColorClass = "text-yellow-400";
+                } else if (leaderboardMetric === "subjective") {
+                  nationalScoreVal = nationalCombinedMetrics.subjectiveTestScore;
+                  nationalScoreLabel = "Subjective";
+                  nationalScoreColorClass = "text-yellow-500";
+                } else if (leaderboardMetric === "ioqm") {
+                  nationalScoreVal = nationalCombinedMetrics.ioqmScore;
+                  nationalScoreLabel = "IOQM";
+                  nationalScoreColorClass = "text-cyan-400";
+                } else if (leaderboardMetric === "ramp_up") {
+                  nationalScoreVal = nationalCombinedMetrics.rampUpScore;
+                  nationalScoreLabel = "Ramp Up";
+                  nationalScoreColorClass = "text-purple-400";
+                } else if (leaderboardMetric === "attendance") {
+                  nationalScoreVal = nationalCombinedMetrics.testAttendanceScore;
+                  nationalScoreLabel = "Attendance";
+                  nationalScoreColorClass = "text-emerald-400";
+                } else if (leaderboardMetric === "retention") {
+                  nationalScoreVal = nationalCombinedMetrics.studentRetentionScore;
+                  nationalScoreLabel = "Retention";
+                  nationalScoreColorClass = "text-orange-400";
+                }
+
+                return (
+                  <button
+                    id="center-card-all-centers-combined"
+                    onClick={() => setSelectedCenterName("All Centers Combined")}
+                    className={`w-full text-left rounded-lg p-2.5 transition-all duration-200 border flex items-center justify-between group cursor-pointer ${
+                      selectedCenterName === "All Centers Combined"
+                        ? "bg-slate-850 border-cyan-500/80 shadow-md shadow-cyan-500/5 animate-pulse"
+                        : "bg-slate-950/40 border-slate-800/80 hover:bg-slate-800/30 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {/* Global Icon Badge / Flag */}
+                      <div className={`w-8 h-8 rounded shrink-0 flex flex-col items-center justify-center font-bold font-mono text-center ${
+                        selectedCenterName === "All Centers Combined"
+                          ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30"
+                          : "bg-slate-800 text-slate-400"
+                      }`}>
+                        <span className="text-[10px] font-extrabold uppercase font-mono tracking-tight">ALL</span>
+                      </div>
+
+                      <div className="min-w-0">
+                        <h3 className={`text-xs font-bold tracking-tight transition-colors truncate uppercase flex items-center gap-1.5 ${
+                          selectedCenterName === "All Centers Combined" ? "text-cyan-400" : "text-slate-100 group-hover:text-cyan-400"
+                        }`}>
+                          👑 All Centers Combined
+                        </h3>
+                        <div className="flex items-center gap-1.5 text-[9.5px] text-slate-400 mt-0.5 font-sans">
+                          <span>National Pool: {students.length} students</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <div className={`font-mono text-xs font-bold ${nationalScoreColorClass}`}>
+                        {nationalScoreVal.toFixed(1)}
+                      </div>
+                      <span className="text-[8px] text-slate-500 block font-mono">{nationalScoreLabel} Avg</span>
+                    </div>
+                  </button>
+                );
+              })()}
+
+              {/* Dotted separator between combined and specific regional centers */}
+              <div className="border-t border-dashed border-slate-800 my-1" />
+
               {activeMetricList.map((center) => {
                 const isSelected = center.centerName === selectedCenterName;
                 
@@ -1709,6 +2332,56 @@ export default function App() {
           {/* ==========================================
               TAB INTERACTION 1: COMBINED PERFORMANCE VIEW
               ========================================== */}
+          {students.length === 0 ? (
+            <div className="bg-slate-900 border border-dashed border-slate-700/65 rounded-xl p-8 text-center sm:p-12 space-y-6 shadow-2xl relative overflow-hidden animate-fade-in" id="empty-state-welcome">
+              <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 via-transparent to-transparent pointer-events-none" />
+              <div className="mx-auto w-14 h-14 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-full flex items-center justify-center">
+                <FileSpreadsheet className="w-7 h-7" />
+              </div>
+              <div className="max-w-xl mx-auto space-y-3">
+                <h3 className="text-xl font-bold font-display tracking-tight text-white flex items-center justify-center gap-2">
+                  <span>🎓 Onboarding Guide: Prepare & Upload Live Data</span>
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Congratulations! All sandbox preloaded records have been successfully cleaned. The dashboard has transitioned to Live Integration Mode and is ready for your actual student analytics.
+                </p>
+                <div className="pb-2" />
+                <div className="p-5 bg-slate-900/90 text-left border border-slate-800 rounded-lg space-y-4 text-xs leading-relaxed">
+                  <span className="text-cyan-400 font-bold block border-b border-slate-800 pb-1.5 uppercase tracking-wider text-[10px] font-mono">📋 Step-by-Step Instructions: Adding Live Data</span>
+                  <div className="space-y-3 text-slate-300">
+                    <div>
+                      <strong className="text-slate-100 flex items-center gap-1.5">
+                        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-cyan-500/15 text-cyan-400 font-mono text-[9px] font-bold">1</span>
+                        Download Structured Templates
+                      </strong>
+                      <p className="text-[11px] mt-0.5 leading-relaxed text-slate-400">
+                        Use the spreadsheet matrix uploader panel on the left to download pre-configured Excel <code>.xlsx</code> templates for columns, score bounds, and retention.
+                      </p>
+                    </div>
+                    <div>
+                      <strong className="text-slate-100 flex items-center gap-1.5">
+                        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-cyan-500/15 text-cyan-400 font-mono text-[9px] font-bold">2</span>
+                        Configure Headers & Coordinates
+                      </strong>
+                      <p className="text-[11px] mt-0.5 leading-relaxed text-slate-400">
+                        Make sure your local spreadsheet has correct header columns matching: <code>id</code> (unique roll number), <code>name</code>, <code>center</code> (e.g. <code>Kota Prime</code>), and <code>grade</code> (e.g. <code>9</code>, <code>10</code>, <code>11</code>, <code>12</code>).
+                      </p>
+                    </div>
+                    <div>
+                      <strong className="text-slate-100 flex items-center gap-1.5">
+                        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-cyan-500/15 text-cyan-400 font-mono text-[9px] font-bold">3</span>
+                        Drag & Drop or Select Format
+                      </strong>
+                      <p className="text-[11px] mt-0.5 leading-relaxed text-slate-400">
+                        Select corresponding matrix format from uploader format dropdown (Format 1-5 or Master Format) and drag your files. The system consolidates, evaluates rules, re-ranks regional centers and enables target remedial simulation instantly on your screen.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
           {selectedTab === "combined" && (
             <div className="space-y-6" id="view-final-rank">
               
@@ -1721,7 +2394,7 @@ export default function App() {
                 <div className="p-4 bg-rose-500/5 border border-rose-500/20 rounded-lg">
                   <h3 className="font-semibold text-rose-400 text-sm flex items-center gap-2 mb-2">
                     <AlertCircle className="w-4 h-4" />
-                    ❌ Kahan Maar Kha Gaye? (The Main Rank Leaks)
+                    ❌ Key Metrics to Optimize (Primary Performance Gaps)
                   </h3>
                   <p className="text-sm text-slate-300 leading-relaxed">
                     Our analysis indicates that <strong className="text-rose-300 underline underline-offset-4">{rankLeakInfo.name}</strong> is dragging down the overall center score the most, currently standing at <strong className="text-rose-400">{rankLeakInfo.score.toFixed(1)}/100 points</strong> (representing a weight proportion of {rankLeakInfo.weight}). 
@@ -1868,7 +2541,7 @@ export default function App() {
                 </div>
 
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Generate a frank, customized evaluation report with a passionate PW voice in Hinglish analyzing exactly what gaps holding back the selected center.
+                  Generate an objective, customized evaluation report with professional academic insights analyzing exactly what gaps are holding back the selected center.
                 </p>
 
                 {aiReport && (
@@ -1933,10 +2606,10 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Element B Remediation Footprint Card */}
+                  {/* Element B Failing Marks Prevention Card */}
                   <div className="p-4 bg-slate-950 rounded-lg border border-slate-800/80">
                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
-                      Element B: Remediation Footprint (Weight: 40%)
+                      Element B: Failing Marks Prevention (Weight: 40%)
                     </span>
                     <h4 className="text-sm font-semibold text-slate-200 mt-1.5 flex justify-between items-center">
                       <span>Papers under 40% (Fail-rate):</span>
@@ -1989,7 +2662,7 @@ export default function App() {
                       </span>
                       <strong>🌟 Target Tier 2 (Coach All Failing Papers)</strong>
                       <span className="block text-slate-400 mt-1.5 font-normal text-[11px]">
-                        Eradicates all papers scoring under 40% across center's active student database. Footprint drops &lt; 5%, unlocking 100/100 points!
+                        Supports all students who scored under 40% to pass their tests. Helps the center achieve 100/100 points!
                       </span>
                     </button>
                   </div>
@@ -1998,11 +2671,11 @@ export default function App() {
                 {/* BOARDERLINE CHECKBOX CONTROLLERS SECTION */}
                 <div className="space-y-3">
                   <h3 className="text-xs uppercase font-bold tracking-wider text-slate-400">
-                    📋 Teacher Priority Intervention Selection
+                    📋 Student Coaching Selection
                   </h3>
                   
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Check the boxes next to individual borderline students below to simulate coaching them. Watch the National Ranks and Subjective Score recalculate instantly!
+                    Check the boxes below to simulate coaching individual students. Daily score averages will update instantly!
                   </p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
@@ -2152,17 +2825,36 @@ export default function App() {
                   The IOQM metric scales linearly based on average scores of active, non-absent students. Giving concept-checksheets and custom practices to the following at-risk students boosts their simulated marks to <strong className="text-cyan-400 font-mono">90%</strong> (maximizing centers overall indices).
                 </p>
 
+                {/* PAGINATION & SEARCH FOR IOQM */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
+                  <div className="relative flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      placeholder="Search IOQM students by name or ID..."
+                      value={ioqmSearch}
+                      onChange={(e) => {
+                        setIoqmSearch(e.target.value);
+                        setIoqmPage(1);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-3.5 py-1.5 text-xs focus:outline-none focus:border-cyan-500 font-sans"
+                    />
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    Showing {paginatedIoqmItems.length} of {filteredIoqmItems.length} filtered items ({actionablePlan.ioqmItems.length} total)
+                  </div>
+                </div>
+
                 <div className="space-y-3 pt-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-cyan-400" />
-                    Pupils Needing IOQM Remedial Support ({actionablePlan.ioqmItems.length} found):
+                    Pupils Needing IOQM Remedial Support ({filteredIoqmItems.length} found):
                   </h3>
 
-                  {actionablePlan.ioqmItems.length === 0 ? (
-                    <p className="text-xs text-slate-500 italic pb-2">Congratulations! Your entire pool scored &gt;= 90% in IOQM.</p>
+                  {filteredIoqmItems.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="ioqm-checklist-elements">
-                      {actionablePlan.ioqmItems.map(({ student, currentScore }) => {
+                      {paginatedIoqmItems.map(({ student, currentScore }) => {
                         const isCoached = coachedStudentIds.includes(student.id);
                         return (
                           <button
@@ -2210,7 +2902,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-850 text-slate-300 divide-slate-850">
-                        {actionablePlan.ioqmItems.map(({ student, currentScore }) => {
+                        {paginatedIoqmItems.map(({ student, currentScore }) => {
                           const isCoached = coachedStudentIds.includes(student.id);
                           return (
                             <tr key={student.id} className="hover:bg-slate-900/40">
@@ -2226,6 +2918,36 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* IOQM PAGINATION CONTROLS */}
+                  {ioqmTotalPages > 1 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 font-sans">
+                      <div className="text-[11px] font-mono text-slate-500">
+                        Showing {Math.min(filteredIoqmItems.length, (ioqmPage - 1) * ioqmPageSize + 1)}–{Math.min(filteredIoqmItems.length, ioqmPage * ioqmPageSize)} of {filteredIoqmItems.length} students
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIoqmPage((p) => Math.max(1, p - 1))}
+                          disabled={ioqmPage === 1}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          ◀ Prev
+                        </button>
+                        <span className="font-mono text-slate-300">
+                          Page {ioqmPage} of {ioqmTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIoqmPage((p) => Math.min(ioqmTotalPages, p + 1))}
+                          disabled={ioqmPage === ioqmTotalPages}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2248,20 +2970,38 @@ export default function App() {
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
-                  The Ramp Up topper index is calculated from the proportion of Class 9 & 10 pupils who secure <strong className="text-purple-400 font-mono">&gt;= 80% marks</strong>. Giving active remedial reviews clears the 80% ceiling (boosted to 85% in simulation).
+                  The Ramp Up topper index is calculated from the proportion of Class 9 & 10 pupils who secure <strong className="text-purple-400 font-mono">&gt;= 80% marks</strong>. Giving active remedial reviews clears the 80% marks ceiling (boosted to 85% in simulation).
                 </p>
+                {/* PAGINATION & SEARCH FOR RAMP UP */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
+                  <div className="relative flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      placeholder="Search Ramp Up students by name or ID..."
+                      value={rampUpSearch}
+                      onChange={(e) => {
+                        setRampUpSearch(e.target.value);
+                        setRampUpPage(1);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-3.5 py-1.5 text-xs focus:outline-none focus:border-cyan-500 font-sans"
+                    />
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    Showing {paginatedRampUpItems.length} of {filteredRampUpItems.length} filtered items ({actionablePlan.rampUpItems.length} total)
+                  </div>
+                </div>
 
                 <div className="space-y-3 pt-2 font-sans">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-purple-405 text-purple-400" />
-                    Class 9 & 10 Priority Students needing Ramp Up Boost ({actionablePlan.rampUpItems.length} found):
+                    Class 9 & 10 Priority Students needing Ramp Up Boost ({filteredRampUpItems.length} found):
                   </h3>
 
-                  {actionablePlan.rampUpItems.length === 0 ? (
-                    <p className="text-xs text-slate-500 italic pb-2">Congratulations! All active 9th & 10th graders have secured &gt;= 80% marks in Ramp Up.</p>
+                  {filteredRampUpItems.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="rampup-checklist-elements">
-                      {actionablePlan.rampUpItems.map(({ student, currentScore }) => {
+                      {paginatedRampUpItems.map(({ student, currentScore }) => {
                         const isCoached = coachedStudentIds.includes(student.id);
                         return (
                           <button
@@ -2282,7 +3022,7 @@ export default function App() {
                                 <span className="text-[10px] font-mono text-slate-400 bg-slate-900 px-1 py-0.5 rounded">Grade {student.grade} | {student.id}</span>
                               </div>
                               <div className="text-[11px] text-slate-400 mt-1">
-                                Current Score: <span className="text-rose-450 text-rose-400 font-bold font-mono">{currentScore}%</span>
+                                Current Score: <span className="text-rose-455 text-rose-400 font-bold font-mono">{currentScore}%</span>
                                 <br />Simulated Topper: <span className="text-purple-400 font-bold font-mono">85% (Cleared target!)</span>
                               </div>
                             </div>
@@ -2309,7 +3049,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-850 text-slate-300 divide-slate-850">
-                        {actionablePlan.rampUpItems.map(({ student, currentScore }) => {
+                        {paginatedRampUpItems.map(({ student, currentScore }) => {
                           return (
                             <tr key={student.id} className="hover:bg-slate-900/40">
                               <td className="p-3 font-semibold text-slate-205">{student.name}</td>
@@ -2322,6 +3062,36 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* RAMP UP PAGINATION CONTROLS */}
+                  {rampUpTotalPages > 1 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 font-sans">
+                      <div className="text-[11px] font-mono text-slate-500">
+                        Showing {Math.min(filteredRampUpItems.length, (rampUpPage - 1) * rampUpPageSize + 1)}–{Math.min(filteredRampUpItems.length, rampUpPage * rampUpPageSize)} of {filteredRampUpItems.length} students
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRampUpPage((p) => Math.max(1, p - 1))}
+                          disabled={rampUpPage === 1}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          ◀ Prev
+                        </button>
+                        <span className="font-mono text-slate-300">
+                          Page {rampUpPage} of {rampUpTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setRampUpPage((p) => Math.min(rampUpTotalPages, p + 1))}
+                          disabled={rampUpPage === rampUpTotalPages}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2347,17 +3117,36 @@ export default function App() {
                   The attendance rate is computed by active student attendance. Giving absent parents phone coaching or offline support schedules restores simulated papers (converts "Absent" to "Present" with dynamic pass average).
                 </p>
 
+                {/* PAGINATION & SEARCH FOR ATTENDANCE */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
+                  <div className="relative flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      placeholder="Search absent students by name or ID..."
+                      value={attendanceSearch}
+                      onChange={(e) => {
+                        setAttendanceSearch(e.target.value);
+                        setAttendancePage(1);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-3.5 py-1.5 text-xs focus:outline-none focus:border-cyan-500 font-sans"
+                    />
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    Showing {paginatedAbsenteeItems.length} of {filteredAbsenteeItems.length} filtered items ({actionablePlan.absentees.length} total)
+                  </div>
+                </div>
+
                 <div className="space-y-3 pt-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-emerald-400" />
-                    Absent Student Logs for counseling outreach ({actionablePlan.absentees.length} found):
+                    Absent Student Logs for counseling outreach ({filteredAbsenteeItems.length} found):
                   </h3>
 
-                  {actionablePlan.absentees.length === 0 ? (
-                    <p className="text-xs text-slate-500 italic pb-2 animate-pulse">✓ Perfect 100% full attendance recorded across both evaluative periods in this center!</p>
+                  {filteredAbsenteeItems.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="attendance-checklist-elements">
-                      {actionablePlan.absentees.map(({ student, type }) => {
+                      {paginatedAbsenteeItems.map(({ student, type }) => {
                         const isCoached = coachedStudentIds.includes(student.id);
                         return (
                           <button
@@ -2405,7 +3194,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-850 text-slate-300">
-                        {actionablePlan.absentees.map(({ student, type }) => {
+                        {paginatedAbsenteeItems.map(({ student, type }) => {
                           const isCoached = coachedStudentIds.includes(student.id);
                           return (
                             <tr key={`${student.id}-${type}`} className="hover:bg-slate-900/40">
@@ -2421,6 +3210,36 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* ATTENDANCE PAGINATION CONTROLS */}
+                  {attendanceTotalPages > 1 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 font-sans">
+                      <div className="text-[11px] font-mono text-slate-500">
+                        Showing {Math.min(filteredAbsenteeItems.length, (attendancePage - 1) * attendancePageSize + 1)}–{Math.min(filteredAbsenteeItems.length, attendancePage * attendancePageSize)} of {filteredAbsenteeItems.length} students
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAttendancePage((p) => Math.max(1, p - 1))}
+                          disabled={attendancePage === 1}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          ◀ Prev
+                        </button>
+                        <span className="font-mono text-slate-300">
+                          Page {attendancePage} of {attendanceTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setAttendancePage((p) => Math.min(attendanceTotalPages, p + 1))}
+                          disabled={attendancePage === attendanceTotalPages}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2446,17 +3265,36 @@ export default function App() {
                   Retention represents our core user-connection metric, constituting the largest category weight of <strong className="text-orange-400 font-mono">30%</strong> of the consolidated leaderboard. Solving individual fee queries or academic queries flips warning status directly to active (retains simulated value to present).
                 </p>
 
+                {/* PAGINATION & SEARCH FOR RETENTION */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
+                  <div className="relative flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      placeholder="Search unretained students by name or ID..."
+                      value={retentionSearch}
+                      onChange={(e) => {
+                        setRetentionSearch(e.target.value);
+                        setRetentionPage(1);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-3.5 py-1.5 text-xs focus:outline-none focus:border-cyan-500 font-sans"
+                    />
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    Showing {paginatedRetentionItems.length} of {filteredRetentionItems.length} filtered items ({actionablePlan.retentionItems.length} total)
+                  </div>
+                </div>
+
                 <div className="space-y-3 pt-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-orange-400" />
-                    At-Risk Dropped-out Pupils requiring counseling feedback ({actionablePlan.retentionItems.length} found):
+                    At-Risk Dropped-out Pupils requiring counseling feedback ({filteredRetentionItems.length} found):
                   </h3>
 
-                  {actionablePlan.retentionItems.length === 0 ? (
-                    <p className="text-xs text-slate-500 italic pb-2">🎉 Congratulations! 100% full retention achieved across all cohorts.</p>
+                  {filteredRetentionItems.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="retention-checklist-elements">
-                      {actionablePlan.retentionItems.map(({ student, action }) => {
+                      {paginatedRetentionItems.map(({ student, action }) => {
                         const isCoached = coachedStudentIds.includes(student.id);
                         return (
                           <button
@@ -2504,7 +3342,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-850 text-slate-300">
-                        {actionablePlan.retentionItems.map(({ student, action }) => {
+                        {paginatedRetentionItems.map(({ student, action }) => {
                           const isCoached = coachedStudentIds.includes(student.id);
                           return (
                             <tr key={student.id} className="hover:bg-slate-900/40">
@@ -2520,6 +3358,36 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* RETENTION PAGINATION CONTROLS */}
+                  {retentionTotalPages > 1 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 font-sans">
+                      <div className="text-[11px] font-mono text-slate-500">
+                        Showing {Math.min(filteredRetentionItems.length, (retentionPage - 1) * retentionPageSize + 1)}–{Math.min(filteredRetentionItems.length, retentionPage * retentionPageSize)} of {filteredRetentionItems.length} students
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRetentionPage((p) => Math.max(1, p - 1))}
+                          disabled={retentionPage === 1}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          ◀ Prev
+                        </button>
+                        <span className="font-mono text-slate-300">
+                          Page {retentionPage} of {retentionTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setRetentionPage((p) => Math.min(retentionTotalPages, p + 1))}
+                          disabled={retentionPage === retentionTotalPages}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2531,35 +3399,135 @@ export default function App() {
           {selectedTab === "pool" && (
             <div className="space-y-6" id="view-pool-evaluation">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xl font-bold font-display text-slate-50 tracking-tight" id="pool-view-title">
-                    👥 Active Student Evaluation Database
-                  </h2>
-                  <span className="text-xs text-cyan-400 font-mono bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
-                    Rules A & B Active
-                  </span>
+                <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3 flex-wrap">
+                  <div>
+                    <h2 className="text-xl font-bold font-display text-slate-50 tracking-tight" id="pool-view-title">
+                      👥 Active Student Evaluation Database
+                    </h2>
+                    <p className="text-xs text-slate-400">Total list of student registrations and evaluations for {selectedCenterScores.centerName}. Click headers to sort.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-cyan-400 font-mono bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+                      Rules A & B Active
+                    </span>
+                    <button
+                      onClick={handleExportStudentPoolCSV}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-slate-50 font-semibold text-xs py-2 px-4 rounded-lg flex items-center gap-1.5 transition cursor-pointer active:scale-98 shadow-md"
+                      title="Export this current center student list directory to a CSV spreadsheet"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export Hub (.csv)</span>
+                    </button>
+                  </div>
                 </div>
 
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  This auditing sheet details all row-level student registrations and evaluations for {selectedCenterScores.centerName}. Verify how absences are computed to guarantee scoring transparency.
-                </p>
+                 {/* POOL EVALUATION SEARCH & COUNTER */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
+                  <div className="relative flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      placeholder="Search students by name or ID..."
+                      value={poolSearch}
+                      onChange={(e) => {
+                        setPoolSearch(e.target.value);
+                        setPoolPage(1);
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 text-slate-100 rounded-lg px-3.5 py-1.5 text-xs focus:outline-none focus:border-cyan-500 font-sans"
+                    />
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    Showing {paginatedPoolStudents.length} of {filteredAndSortedPoolStudents.length} filtered items ({sortedSelectedCenterStudents.length} center total)
+                  </div>
+                </div>
 
                 {/* MAIN STUDENTS DIRECTORY */}
                 <div className="border border-slate-800 rounded-lg overflow-x-auto">
                   <table className="w-full text-left text-xs bg-slate-950 font-sans">
-                    <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800">
+                    <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800 uppercase text-[10px] select-none">
                       <tr>
-                        <th className="p-3">Student</th>
-                        <th className="p-3">Grade</th>
-                        <th className="p-3">T1 Attendance</th>
-                        <th className="p-3">T2 Attendance</th>
-                        <th className="p-4">Evaluated Avg</th>
-                        <th className="p-4">Retention Status</th>
+                        <th 
+                          onClick={() => {
+                            if (studentSortField === "name") {
+                              setStudentSortAsc(!studentSortAsc);
+                            } else {
+                              setStudentSortField("name");
+                              setStudentSortAsc(true);
+                            }
+                          }}
+                          className="p-3 cursor-pointer hover:bg-slate-850 hover:text-slate-100 transition"
+                        >
+                          Student {studentSortField === "name" ? (studentSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (studentSortField === "grade") {
+                              setStudentSortAsc(!studentSortAsc);
+                            } else {
+                              setStudentSortField("grade");
+                              setStudentSortAsc(true);
+                            }
+                          }}
+                          className="p-3 cursor-pointer hover:bg-slate-850 hover:text-slate-100 transition whitespace-nowrap"
+                        >
+                          Grade {studentSortField === "grade" ? (studentSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (studentSortField === "t1_attendance") {
+                              setStudentSortAsc(!studentSortAsc);
+                            } else {
+                              setStudentSortField("t1_attendance");
+                              setStudentSortAsc(true);
+                            }
+                          }}
+                          className="p-3 cursor-pointer hover:bg-slate-850 hover:text-slate-100 transition whitespace-nowrap"
+                        >
+                          T1 Attendance {studentSortField === "t1_attendance" ? (studentSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (studentSortField === "t2_attendance") {
+                              setStudentSortAsc(!studentSortAsc);
+                            } else {
+                              setStudentSortField("t2_attendance");
+                              setStudentSortAsc(true);
+                            }
+                          }}
+                          className="p-3 cursor-pointer hover:bg-slate-850 hover:text-slate-100 transition whitespace-nowrap"
+                        >
+                          T2 Attendance {studentSortField === "t2_attendance" ? (studentSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (studentSortField === "averageScore") {
+                              setStudentSortAsc(!studentSortAsc);
+                            } else {
+                              setStudentSortField("averageScore");
+                              setStudentSortAsc(false);
+                            }
+                          }}
+                          className="p-4 cursor-pointer hover:bg-slate-850 hover:text-slate-100 transition whitespace-nowrap text-cyan-400"
+                        >
+                          Evaluated Avg {studentSortField === "averageScore" ? (studentSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (studentSortField === "retained") {
+                              setStudentSortAsc(!studentSortAsc);
+                            } else {
+                              setStudentSortField("retained");
+                              setStudentSortAsc(false);
+                            }
+                          }}
+                          className="p-4 cursor-pointer hover:bg-slate-850 hover:text-slate-100 transition whitespace-nowrap"
+                        >
+                          Retention Status {studentSortField === "retained" ? (studentSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
                         <th className="p-4">Audit Status Badge</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
-                      {students.filter(s => s.center === selectedCenterName).map((student) => {
+                      {paginatedPoolStudents.map((student) => {
                         const isCoached = coachedStudentIds.includes(student.id);
                         const isT1Present = student.t1_attendance === "Present";
                         const isT2Present = student.t2_attendance === "Present";
@@ -2666,6 +3634,36 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* GENERAL POOL PAGINATION CONTROLS */}
+                {poolTotalPages > 1 && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 font-sans">
+                    <div className="text-[11px] font-mono text-slate-500">
+                      Showing {Math.min(filteredAndSortedPoolStudents.length, (poolPage - 1) * poolPageSize + 1)}–{Math.min(filteredAndSortedPoolStudents.length, poolPage * poolPageSize)} of {filteredAndSortedPoolStudents.length} students
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPoolPage((p) => Math.max(1, p - 1))}
+                        disabled={poolPage === 1}
+                        className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                      >
+                        ◀ Prev
+                        </button>
+                        <span className="font-mono text-slate-300">
+                          Page {poolPage} of {poolTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPoolPage((p) => Math.min(poolTotalPages, p + 1))}
+                          disabled={poolPage === poolTotalPages}
+                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
+                        >
+                          Next ▶
+                        </button>
+                      </div>
+                    </div>
+                  )}
               </div>
             </div>
           )}
@@ -2685,7 +3683,7 @@ export default function App() {
                   📐 Evaluation Blueprint, Weightage & Live Formula Inspector
                 </h2>
                 <p className="text-xs text-slate-400 leading-relaxed font-sans">
-                  Yeh dashboard Physics Wallah (PW) Regional Center Leads dynamic rankings model ke rulebook ko transparently depict karta hai. 
+                  This dashboard transparently depicts the evaluation guidelines for the Physics Wallah (PW) Regional Center Leads dynamic rankings model. 
                   Below, check how scores for <strong className="text-yellow-400">{selectedCenterScores.centerName}</strong> are mathematically synthesized on-the-fly and deploy bulk target intervention campaigns.
                 </p>
               </div>
@@ -2718,7 +3716,7 @@ export default function App() {
                     </div>
 
                     <div className="bg-slate-950 p-3 rounded-lg border border-slate-850 space-y-1">
-                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Element B (40% Weight): Remediation Footprint</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block">Element B (40% Weight): Failing Marks Prevention</span>
                       <p className="leading-relaxed">
                         Ratio of individual paper scores falling under 40% (Fail rate). If fail rate is &le; 5%, 100 points is awarded. If &ge; 15%, 0 points is awarded. In-between (5%-15%), scaled linearly dropping from 100 to 0.
                       </p>
@@ -2994,26 +3992,172 @@ export default function App() {
                       <Award className="w-5 h-5 text-yellow-500 shrink-0" />
                       🥇 Comprehensive National Center Leaderboard Check (All Ranks Side-by-Side)
                     </h3>
-                    <p className="text-xs text-slate-400">Review other center standing criteria scores in a unified admin spreadsheet index grid.</p>
+                    <p className="text-xs text-slate-400">Review other center standing criteria scores in a unified admin spreadsheet index grid. Click headers to sort.</p>
                   </div>
+                  <button
+                    onClick={handleExportLeaderboardCSV}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-slate-50 font-semibold text-xs py-2 px-3.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer active:scale-98 shadow-md shrink-0"
+                    title="Export the national leaderboard data directly to a CSV spreadsheet"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export Leaderboard (.csv)</span>
+                  </button>
                 </div>
 
                 <div className="overflow-x-auto border border-slate-800 rounded-lg">
                   <table className="w-full text-left text-xs bg-slate-950 font-sans">
-                    <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800 text-[10px] uppercase">
+                    <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800 text-[10px] uppercase select-none">
                       <tr>
-                        <th className="p-3">Rank</th>
-                        <th className="p-3 text-left">Center Hub</th>
-                        <th className="p-3 text-center text-yellow-405 text-yellow-405 text-yellow-400 font-bold bg-yellow-500/5">Overall Score</th>
-                        <th className="p-3 text-center text-cyan-400">Subjective (25%)</th>
-                        <th className="p-3 text-center text-yellow-500 font-medium">IOQM (20%)</th>
-                        <th className="p-3 text-center text-purple-400">Ramp Up (15%)</th>
-                        <th className="p-2.5 text-center text-emerald-400">Attn (10%)</th>
-                        <th className="p-2.5 text-center text-orange-400">Retn (30%)</th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "rank") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("rank");
+                              setCenterSortAsc(true);
+                            }
+                          }}
+                          className="p-3 cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap"
+                        >
+                          Rank {centerSortField === "rank" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "centerName") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("centerName");
+                              setCenterSortAsc(true);
+                            }
+                          }}
+                          className="p-3 text-left cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap"
+                        >
+                          Center Hub {centerSortField === "centerName" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "consolidatedScore") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("consolidatedScore");
+                              setCenterSortAsc(false);
+                            }
+                          }}
+                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-yellow-400 font-bold bg-yellow-500/5 whitespace-nowrap"
+                        >
+                          Overall Score {centerSortField === "consolidatedScore" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "subjective") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("subjective");
+                              setCenterSortAsc(false);
+                            }
+                          }}
+                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-cyan-400 whitespace-nowrap"
+                        >
+                          Subjective (25%) {centerSortField === "subjective" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "ioqm") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("ioqm");
+                              setCenterSortAsc(false);
+                            }
+                          }}
+                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-yellow-500 font-medium whitespace-nowrap"
+                        >
+                          IOQM (20%) {centerSortField === "ioqm" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "rampUp") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("rampUp");
+                              setCenterSortAsc(false);
+                            }
+                          }}
+                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-purple-400 whitespace-nowrap"
+                        >
+                          Ramp Up (15%) {centerSortField === "rampUp" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "attendance") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("attendance");
+                              setCenterSortAsc(false);
+                            }
+                          }}
+                          className="p-2.5 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-emerald-400 whitespace-nowrap"
+                        >
+                          Attn (10%) {centerSortField === "attendance" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "retention") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("retention");
+                              setCenterSortAsc(false);
+                            }
+                          }}
+                          className="p-2.5 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-orange-400 whitespace-nowrap"
+                        >
+                          Retn (30%) {centerSortField === "retention" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-850">
-                      {rankedCenters.map((item) => {
+                      {/* Special National Combined Row */}
+                      <tr 
+                        onClick={() => setSelectedCenterName("All Centers Combined")}
+                        className={`transition-colors cursor-pointer hover:bg-slate-850/40 text-[11px] ${
+                          selectedCenterName === "All Centers Combined" ? "bg-cyan-950/40 border-y border-cyan-500/50" : ""
+                        }`}
+                      >
+                        <td className="p-3 font-mono font-extrabold text-slate-50 border-r border-slate-800/40">
+                          <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400">
+                            NAT
+                          </span>
+                        </td>
+                        <td className="p-3 font-semibold text-slate-200">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={selectedCenterName === "All Centers Combined" ? "text-cyan-400 font-bold" : "text-slate-300"}>
+                              👑 All Centers Combined (National)
+                            </span>
+                            {selectedCenterName === "All Centers Combined" && (
+                              <span className="bg-cyan-500 text-slate-950 font-mono font-bold text-[8px] px-1.5 py-0.2 rounded shrink-0 uppercase">Active</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3 font-mono font-bold text-center bg-cyan-500/10 text-cyan-400 text-xs shadow-inner">
+                          {nationalCombinedMetrics.consolidatedScore.toFixed(1)}
+                        </td>
+                        <td className="p-3 font-mono text-center text-slate-300">
+                          {nationalCombinedMetrics.subjectiveTestScore.toFixed(1)}
+                        </td>
+                        <td className="p-3 font-mono text-center text-slate-300">
+                          {nationalCombinedMetrics.ioqmScore.toFixed(1)}
+                        </td>
+                        <td className="p-3 font-mono text-center text-slate-300">
+                          {nationalCombinedMetrics.rampUpScore.toFixed(1)}
+                        </td>
+                        <td className="p-2.5 font-mono text-center text-slate-300">
+                          {nationalCombinedMetrics.testAttendanceScore.toFixed(1)}
+                        </td>
+                        <td className="p-2.5 font-mono text-center text-slate-300">
+                          {nationalCombinedMetrics.studentRetentionScore.toFixed(1)}
+                        </td>
+                      </tr>
+
+                      {sortedRankedCenters.map((item) => {
                         const isSelectedCenter = item.centerName === selectedCenterName;
                         return (
                           <tr 
@@ -3088,15 +4232,15 @@ export default function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   
-                  {/* Lever 1: Failures Doubt Remediation */}
+                  {/* Lever 1: Prevent Students Failing */}
                   <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 1: SUBJECTIVE FAIL REMEDIATION</span>
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 1: PREVENT STUDENTS FAILING</span>
                         <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.subjectiveFailings.length} papers failing</span>
                       </div>
                       <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Weekly remedial class runs targeted to fail-risk students. Boosts all subject entrance slips under 40% to 45% (eliminates failures and maxes out your Subjective Element B footprint!).
+                        Conduct extra doubt-clearing classes for students who scored under 40%. This raises their scores to passing marks (45%).
                       </p>
                     </div>
                     <button
@@ -3104,19 +4248,19 @@ export default function App() {
                       disabled={actionablePlan.subjectiveFailings.length === 0}
                       className="w-full text-center bg-cyan-900/30 hover:bg-cyan-800/40 text-cyan-205 py-1.5 rounded font-mono font-bold text-[10px] transition border border-cyan-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
                     >
-                      ⚡ Run Doubt-Class Sheet Simulation
+                      ⚡ Simulate Doubt Classes
                     </button>
                   </div>
 
-                  {/* Lever 2: Propel Near Toppers */}
+                  {/* Lever 2: Encourage Borderline Toppers */}
                   <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-yellow-450 text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded uppercase">LEVER 2: PROPEL NEAR-TOPPERS BRACKETS</span>
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-yellow-450 text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded uppercase">LEVER 2: COOPERATE BORDERLINE TOPPERS</span>
                         <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.subjectiveTopperPotentials.length} candidates found</span>
                       </div>
                       <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Deploy elite question sets for borderline students (80-89% averages). Propels them to the 90%+ scholar grade, heavily scaling up subjective Element A points!
+                        Provide special advanced sheets to borderline students (80-89%). This helps them reach 90%+ and increases the toppers ratio!
                       </p>
                     </div>
                     <button
@@ -3124,19 +4268,19 @@ export default function App() {
                       disabled={actionablePlan.subjectiveTopperPotentials.length === 0}
                       className="w-full text-center bg-yellow-950/30 hover:bg-yellow-905/40 text-yellow-405 text-yellow-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-yellow-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
                     >
-                      ⭐ Boost Borderline Scholar Ratio
+                      ⭐ Encourage Borderline Toppers
                     </button>
                   </div>
 
-                  {/* Lever 3: IOQM Prep Campaigns */}
+                  {/* Lever 3: Olympiad Preparation */}
                   <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-450 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 3: OLYMPIAD CAMPAIGN FOCUS</span>
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-450 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 3: OLYMPIAD PREPARATION</span>
                         <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.ioqmItems.length} at-risk</span>
                       </div>
                       <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Deliver custom math-puzzle checksheets to non-scholar pupils. Simulates raising their IOQM achievements to 90% in average bounds.
+                        Provide math practice sheets to students. This simulates raising their IOQM scores to achieve higher average scores.
                       </p>
                     </div>
                     <button
@@ -3144,19 +4288,19 @@ export default function App() {
                       disabled={actionablePlan.ioqmItems.length === 0}
                       className="w-full text-center bg-slate-900 hover:bg-slate-855 text-cyan-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-slate-800 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
                     >
-                      🏆 Apply IOQM Olympiad Prep Simulator
+                      🏆 Simulate Olympiad Training
                     </button>
                   </div>
 
-                  {/* Lever 4: Convert Absenteeism */}
+                  {/* Lever 4: Attendance Improvement */}
                   <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-emerald-450 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase">LEVER 4: ATTENDANCE ENTRANCE RECOVERY</span>
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-emerald-450 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase">LEVER 4: ATTENDANCE IMPROVEMENT</span>
                         <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.absentees.length} absent entries</span>
                       </div>
                       <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Perform routine teacher calls to single-evaluation absent student homes. Simulates bringing their test appearance to 100% attendance rate.
+                        Call parents of absent students to ensure motivation. This simulates helping all students attend their tests.
                       </p>
                     </div>
                     <button
@@ -3164,27 +4308,27 @@ export default function App() {
                       disabled={actionablePlan.absentees.length === 0}
                       className="w-full text-center bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-emerald-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
                     >
-                      📅 Convert Absentee Slips to Present
+                      📅 Simulate 100% Attendance
                     </button>
                   </div>
 
-                  {/* Lever 5: 100% Retention */}
+                  {/* Lever 5: Student Retention */}
                   <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3 md:col-span-2">
                     <div>
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-orange-455 text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded uppercase">LEVER 5: 100% REGIONAL STUDENT RETENTION</span>
+                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-orange-455 text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded uppercase">LEVER 5: STUDENT RETENTION ISSUES</span>
                         <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.retentionItems.length} dropout/defaulter risks</span>
                       </div>
                       <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Counseling calls to resolve parent disputes, fee queries, and course drops. Resolves and marks all inactive status pupils in center's pool as fully retained.
+                        Resolve fees, parent doubts, and inactive status. This simulates retaining all of your students.
                       </p>
                     </div>
                     <button
                       onClick={handleBulkToggleRetention}
                       disabled={actionablePlan.retentionItems.length === 0}
-                      className="w-full text-center bg-orange-950/30 hover:bg-orange-900/40 text-orange-450 text-orange-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-orange-850/50 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                      className="w-full text-center bg-orange-950/30 hover:bg-orange-900/40 text-orange-455 text-orange-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-orange-850/50 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
                     >
-                      🔄 Run Comprehensive 100% Retention Recovery
+                      💸 Simulate 100% Retention
                     </button>
                   </div>
 
@@ -3208,6 +4352,8 @@ export default function App() {
               </div>
 
             </div>
+          )}
+            </>
           )}
 
         </section>

@@ -1,14 +1,15 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
 import { Student, SubjectScores } from "./types";
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 const provider = new GoogleAuthProvider();
-provider.addScope("https://www.googleapis.com/auth/spreadsheets.readonly");
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
@@ -62,45 +63,6 @@ export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
 };
 
-// Extract spreadsheet ID from diverse URL formats or raw ID input
-export function extractSpreadsheetId(urlOrId: string): string | null {
-  if (!urlOrId) return null;
-  const match = urlOrId.match(/\/d\/([a-zA-Z0-9-_]+)/);
-  if (match && match[1]) {
-    return match[1];
-  }
-  return urlOrId.trim();
-}
-
-// Fetch raw sheet values via Google API
-export async function fetchSpreadsheetValues(
-  spreadsheetId: string,
-  rangeOrSheetName: string = "Sheet1!A:Z",
-  accessToken: string
-): Promise<any[][] | null> {
-  const cleanId = extractSpreadsheetId(spreadsheetId);
-  if (!cleanId) throw new Error("Invalid Spreadsheet URL or ID");
-
-  // Encode range
-  const encodedRange = encodeURIComponent(rangeOrSheetName);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/${encodedRange}`;
-
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `Google API returned status ${res.status}`);
-  }
-
-  const data = await res.json();
-  return data.values || null;
-}
-
 // Map column header text to recognized student properties
 function sanitizeHeader(h: string): string {
   return (h || "")
@@ -108,7 +70,11 @@ function sanitizeHeader(h: string): string {
     .replace(/[^a-z0-9]/g, ""); // strip space, underscore, symbols, brackets
 }
 
-export function parseGoogleSheetRows(rows: any[][]): Student[] {
+export function parseSpreadsheetRowsToStudents(
+  rows: any[][],
+  existingStudents: Student[] = [],
+  matrixType?: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup"
+): Student[] {
   if (!rows || rows.length < 2) {
     throw new Error("Empty spreadsheet or sufficient header row missing.");
   }
@@ -116,12 +82,34 @@ export function parseGoogleSheetRows(rows: any[][]): Student[] {
   const rawHeaders = rows[0].map(h => String(h || "").trim());
   const sanitizedHeaders = rawHeaders.map(sanitizeHeader);
 
-  // Identify column roles
+  // Identify column roles including custom result and retention indicators
   const colIndex = {
-    id: sanitizedHeaders.findIndex(h => ["id", "regno", "registrationnumber", "studentid", "rollno", "rollnumber"].includes(h) || h === "id" || h.includes("studentid") || h.includes("registrationnumber") || h.includes("rollnumber") || h.includes("rollno")),
-    name: sanitizedHeaders.findIndex(h => ["name", "studentname", "student"].includes(h) || h.includes("studentname") || h.includes("name")),
-    grade: sanitizedHeaders.findIndex(h => ["grade", "class", "division", "standard"].includes(h) || h.includes("grade") || h.includes("class")),
-    center: sanitizedHeaders.findIndex(h => ["center", "centername", "branch"].includes(h) || h.includes("center")),
+    id: sanitizedHeaders.findIndex(h => ["id", "regno", "registrationnumber", "studentid", "rollno", "rollnumber"].includes(h) || h === "id" || h.includes("studentid") || h.includes("registrationnumber") || h.includes("rollnumber") || h.includes("rollno") || h.includes("regno")),
+    name: sanitizedHeaders.findIndex(h => ["name", "studentname", "student", "nameofstudents", "nameofstudent"].includes(h) || h.includes("studentname") || h.includes("name") || h.includes("nameofstudent")),
+    grade: sanitizedHeaders.findIndex(h => ["grade", "class", "division", "standard", "cohort", "grade9or10"].includes(h) || h.includes("grade") || h.includes("class") || h.includes("cohort")),
+    center: sanitizedHeaders.findIndex(h => ["center", "centername", "branch", "combinedcenter", "combined_center"].includes(h) || h.includes("center") || h.includes("combinedcenter")),
+    
+    // extra details columns
+    region: sanitizedHeaders.findIndex(h => ["region", "state", "zone"].includes(h) || h === "region" || h.includes("region")),
+    batch: sanitizedHeaders.findIndex(h => ["batch", "section", "batchname"].includes(h) || h === "batch" || h.includes("batch")),
+
+    // retention specific columns
+    defaulter_status: sanitizedHeaders.findIndex(h => ["defaulterstatus", "defaulter", "defaulter_status"].includes(h) || h.includes("defaulter")),
+    admission_cancellation: sanitizedHeaders.findIndex(h => ["admissioncancellation", "cancellation", "cancel", "admission_cancellation"].includes(h) || h.includes("cancellation")),
+    inactive: sanitizedHeaders.findIndex(h => h === "inactive" || h.includes("inactive")),
+    retention: sanitizedHeaders.findIndex(h => ["retained", "isretained", "retention", "activestatus"].includes(h) || h.includes("retained") || h.includes("retention")),
+
+    // result specific columns
+    test_name: sanitizedHeaders.findIndex(h => ["testname", "test", "examname", "test_name"].includes(h) || h.includes("testname") || h.includes("test_name")),
+    test_date: sanitizedHeaders.findIndex(h => ["testdate", "date", "test_date"].includes(h) || h.includes("date") || h.includes("test_date")),
+    attendance: sanitizedHeaders.findIndex(h => ["attendance", "present", "attstatus"].includes(h) || h.includes("attendance")),
+    maths_pct: sanitizedHeaders.findIndex(h => ["mathspct", "mathpct", "maths", "maths_pct"].includes(h) || h.includes("maths")),
+    science_pct: sanitizedHeaders.findIndex(h => ["sciencepct", "science", "sci", "science_pct"].includes(h) || h.includes("science") || h === "sci"),
+    english_pct: sanitizedHeaders.findIndex(h => ["englishpct", "english", "eng", "english_pct"].includes(h) || h.includes("english")),
+    sst_pct: sanitizedHeaders.findIndex(h => ["sstpct", "sst", "sst_pct"].includes(h) || h.includes("sst")),
+    urdu_pct: sanitizedHeaders.findIndex(h => ["urdupct", "urdu", "urdu_pct"].includes(h) || h.includes("urdu")),
+
+    // standard templates columns
     t1_attendance: sanitizedHeaders.findIndex(h => ["t1attendance", "test1attendance", "t1present", "t1status"].includes(h) || h.includes("t1attendance") || h.includes("test1attendance") || (h.includes("attendance") && (h.includes("t1") || h.includes("1")))),
     t2_attendance: sanitizedHeaders.findIndex(h => ["t2attendance", "test2attendance", "t2present", "t2status"].includes(h) || h.includes("t2attendance") || h.includes("test2attendance") || (h.includes("attendance") && (h.includes("t2") || h.includes("2")))),
     t1_physics: sanitizedHeaders.findIndex(h => ["t1physics", "test1physics", "t1phy", "physics1", "physicist1"].includes(h) || (h.includes("physics") && (h.includes("t1") || h.includes("test1") || h.includes("1")))),
@@ -131,8 +119,10 @@ export function parseGoogleSheetRows(rows: any[][]): Student[] {
     t2_chemistry: sanitizedHeaders.findIndex(h => ["t2chemistry", "test2chemistry", "t2chem", "chemistry2"].includes(h) || (h.includes("chemistry") && (h.includes("t2") || h.includes("test2") || h.includes("2")))),
     t2_maths: sanitizedHeaders.findIndex(h => ["t2maths", "t2math", "test2math", "test2maths", "math2", "maths2"].includes(h) || ((h.includes("maths") || h.includes("math")) && (h.includes("t2") || h.includes("test2") || h.includes("2")))),
     ioqm_score: sanitizedHeaders.findIndex(h => ["ioqm", "ioqmscore", "ioqmachievement", "olympiad"].includes(h) || h.includes("ioqm") || h.includes("olympiad")),
-    ramp_up_score: sanitizedHeaders.findIndex(h => ["rampup", "rampupscore", "rampup exam"].includes(h) || h.includes("rampup")),
-    retained: sanitizedHeaders.findIndex(h => ["retained", "isretained", "retention", "activestatus", "retainsstatus"].includes(h) || h.includes("retained") || h.includes("retention"))
+    ramp_up_score: sanitizedHeaders.findIndex(h => ["rampup", "rampupscore", "rampup_score", "rampup exam"].includes(h) || h.includes("rampup")),
+    retained: sanitizedHeaders.findIndex(h => ["retained", "isretained", "retention", "activestatus", "retainsstatus"].includes(h) || h.includes("retained") || h.includes("retention")),
+    total_marks: sanitizedHeaders.findIndex(h => ["totalmarks", "total_marks", "maxmarks", "maximummarks", "total_obt"].includes(h) || h.includes("totalmarks") || h.includes("maxmarks") || h === "total_marks"),
+    subject_total_marks: sanitizedHeaders.findIndex(h => ["subjecttotalmarks", "subject_total_marks", "subjectmaxmarks", "subject_max_marks", "subjecttotal"].includes(h) || h.includes("subjecttotal") || h.includes("subjectmax") || h === "subject_total_marks")
   };
 
   // Helper parser for numbers
@@ -156,7 +146,6 @@ export function parseGoogleSheetRows(rows: any[][]): Student[] {
     const str = String(val || "").trim().toLowerCase();
     if (["retained", "true", "yes", "y", "1"].includes(str)) return true;
     if (["dropped", "false", "no", "n", "0"].includes(str)) return false;
-    // Default fallback is true
     return true;
   };
 
@@ -166,35 +155,406 @@ export function parseGoogleSheetRows(rows: any[][]): Student[] {
     if (["9", "10", "11", "12"].includes(str)) {
       return str as "9" | "10" | "11" | "12";
     }
-    // Default to a realistic standard
     return "10";
   };
 
+  // Safe cell extractor
+  const getCellValue = (row: any[], idx: number): string => {
+    if (idx < 0 || idx >= row.length) return "";
+    return String(row[idx] || "").trim();
+  };
+
+  // Detect sheet schema style dynamically or enforce selection
+  const activeMatrix = matrixType || "all";
+  const isRetentionSheet = activeMatrix === "retention" || (activeMatrix === "all" && (colIndex.defaulter_status >= 0 || colIndex.inactive >= 0 || colIndex.admission_cancellation >= 0));
+  const isResultSheet = activeMatrix === "subjective" || (activeMatrix === "all" && colIndex.test_name >= 0 && (colIndex.maths_pct >= 0 || colIndex.science_pct >= 0 || colIndex.english_pct >= 0 || colIndex.attendance >= 0));
+
+  // --- CASE 1: Retention spreadsheet updates ---
+  if (isRetentionSheet) {
+    const mergedMap = new Map<string, Student>();
+    // Pre-seed matching maps with database snapshots to allow lossless updates
+    existingStudents.forEach(s => {
+      mergedMap.set(s.id.toLowerCase(), { ...s });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length === 0 || !row.some(val => val !== "")) continue;
+
+      const id = getCellValue(row, colIndex.id) || `PW-IMPORTED-${1000 + i}`;
+      const name = getCellValue(row, colIndex.name) || `Student ${i}`;
+      
+      const cohortStr = getCellValue(row, colIndex.grade);
+      let grade: "9" | "10" | "11" | "12" = "10";
+      if (cohortStr.includes("9") || cohortStr.toLowerCase().includes("9th")) grade = "9";
+      else if (cohortStr.includes("11") || cohortStr.toLowerCase().includes("11th")) grade = "11";
+      else if (cohortStr.includes("12") || cohortStr.toLowerCase().includes("12th")) grade = "12";
+      else if (cohortStr.includes("10") || cohortStr.toLowerCase().includes("10th")) grade = "10";
+
+      const center = getCellValue(row, colIndex.center) || "Imported Center";
+
+      // Compute Retention based on: not defaulter + no cancellation + no refund + no inactive
+      const defStatus = getCellValue(row, colIndex.defaulter_status).toLowerCase();
+      const admCancel = getCellValue(row, colIndex.admission_cancellation).toLowerCase();
+      const inactiveVal = getCellValue(row, colIndex.inactive).toLowerCase();
+      const retVal = getCellValue(row, colIndex.retention).toLowerCase();
+
+      let isRetained = true;
+      if (retVal === "no" || retVal === "false" || retVal === "0") {
+        isRetained = false;
+      } else {
+        const isDefaulter = defStatus.includes("defaulter") && !defStatus.includes("not");
+        const hasCancel = admCancel !== "" && admCancel !== "no" && admCancel !== "none" && !admCancel.includes("not");
+        const isInactive = inactiveVal !== "" && inactiveVal !== "no" && inactiveVal !== "none" && !inactiveVal.includes("not");
+
+        if (isDefaulter || hasCancel || isInactive) {
+          isRetained = false;
+        }
+      }
+
+      const key = id.toLowerCase();
+      const regValue = getCellValue(row, colIndex.region) || "Rajasthan";
+      const batValue = getCellValue(row, colIndex.batch) || "11-NF101EA";
+      const defStatusVal = getCellValue(row, colIndex.defaulter_status) || "Not Defaulter";
+      const admCancelVal = getCellValue(row, colIndex.admission_cancellation);
+      const inactiveStatusVal = getCellValue(row, colIndex.inactive);
+
+      if (mergedMap.has(key)) {
+        const existingStudent = mergedMap.get(key)!;
+        existingStudent.name = name;
+        existingStudent.center = center;
+        existingStudent.grade = grade;
+        existingStudent.retained = isRetained;
+        existingStudent.region = regValue;
+        existingStudent.batch = batValue;
+        existingStudent.defaulter_status = defStatusVal;
+        existingStudent.admission_cancellation = admCancelVal;
+        existingStudent.inactive = inactiveStatusVal;
+      } else {
+        mergedMap.set(key, {
+          id,
+          name,
+          grade,
+          center,
+          t1_attendance: "Present",
+          t2_attendance: "Present",
+          t1_scores: { physics: 75, chemistry: 75, maths: 75 },
+          t2_scores: { physics: 75, chemistry: 75, maths: 75 },
+          ioqm_score: 50,
+          retained: isRetained,
+          region: regValue,
+          batch: batValue,
+          defaulter_status: defStatusVal,
+          admission_cancellation: admCancelVal,
+          inactive: inactiveStatusVal
+        });
+      }
+    }
+    return Array.from(mergedMap.values());
+  }
+
+  // --- CASE 2: Result details spreadsheet updates ---
+  if (isResultSheet) {
+    const mergedMap = new Map<string, Student>();
+    existingStudents.forEach(s => {
+      mergedMap.set(s.id.toLowerCase(), { ...s });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length === 0 || !row.some(val => val !== "")) continue;
+
+      const id = getCellValue(row, colIndex.id) || `PW-IMPORTED-${1000 + i}`;
+      const name = getCellValue(row, colIndex.name) || `Student ${i}`;
+      
+      const classStr = getCellValue(row, colIndex.grade);
+      let grade: "9" | "10" | "11" | "12" = "10";
+      if (classStr.includes("9") || classStr.toLowerCase().includes("9th")) grade = "9";
+      else if (classStr.includes("11") || classStr.toLowerCase().includes("11th")) grade = "11";
+      else if (classStr.includes("12") || classStr.toLowerCase().includes("12th")) grade = "12";
+      else if (classStr.includes("8") || classStr.toLowerCase().includes("8th")) grade = "9";
+      else grade = "10";
+
+      const center = getCellValue(row, colIndex.center) || "Imported Center";
+
+      const testName = getCellValue(row, colIndex.test_name);
+      const testNameLower = testName.toLowerCase();
+      
+      // Determine if Test 2 (T2) or Test 1 (T1) based on standard terms and substrings
+      const isT2 = testNameLower.includes("test 2") || 
+                   testNameLower.includes("test -2") || 
+                   testNameLower.includes("test-2") || 
+                   testNameLower.includes("term 2") || 
+                   testNameLower.includes("term ii") || 
+                   testNameLower.includes("test ii") || 
+                   testNameLower.includes("t2") || 
+                   testNameLower.includes("half") || 
+                   (testNameLower.includes("2") && !testNameLower.includes("term 1") && !testNameLower.includes("term i"));
+
+      // Attendance check
+      const attStr = getCellValue(row, colIndex.attendance).toLowerCase();
+      const isAbsent = attStr.includes("absent") || attStr.includes("rescheduled") || attStr.includes("no test");
+      const attendanceStatus = isAbsent ? "Absent" : "Present";
+
+      // Percentage and absolute metrics extraction
+      const mathsScore = parsePercent(getCellValue(row, colIndex.maths_pct));
+      const scienceScore = parsePercent(getCellValue(row, colIndex.science_pct));
+      const englishScore = parsePercent(getCellValue(row, colIndex.english_pct));
+      const sstScore = parsePercent(getCellValue(row, colIndex.sst_pct));
+      const urduScore = parsePercent(getCellValue(row, colIndex.urdu_pct));
+
+      // Build balanced subject allocations
+      const physicsVal = scienceScore ?? englishScore ?? sstScore ?? 75;
+      const chemistryVal = scienceScore ?? urduScore ?? sstScore ?? 75;
+      const mathsVal = mathsScore ?? scienceScore ?? 75;
+
+      const key = id.toLowerCase();
+      if (!mergedMap.has(key)) {
+        mergedMap.set(key, {
+          id,
+          name,
+          grade,
+          center,
+          t1_attendance: "Absent",
+          t2_attendance: "Absent",
+          t1_scores: {},
+          t2_scores: {},
+          ioqm_score: 50,
+          retained: true
+        });
+      }
+
+      const stud = mergedMap.get(key)!;
+      stud.name = name;
+      stud.center = center;
+      stud.grade = grade;
+      
+      // Save original values
+      stud.batch = getCellValue(row, colIndex.batch) || "44-UP121ES";
+      stud.test_date = getCellValue(row, colIndex.test_date) || "25 May, 2026";
+      stud.test_name = testName;
+      stud.attendance = getCellValue(row, colIndex.attendance) || (attendanceStatus === "Present" ? "Present" : "Absent");
+      stud.sst_pct = sstScore ?? physicsVal;
+      stud.urdu_pct = urduScore ?? chemistryVal;
+      stud.maths_pct = mathsScore ?? mathsVal;
+      stud.english_pct = englishScore ?? scienceScore ?? 75;
+      stud.science_pct = scienceScore ?? physicsVal;
+
+      // Detect test count based on total_marks and subject_total_marks
+      const totalMarksVal = colIndex.total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.total_marks)) : undefined;
+      const subjTotalMarksVal = colIndex.subject_total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.subject_total_marks)) : undefined;
+      let testCount = 2; // Default to 2
+      if (totalMarksVal !== undefined && subjTotalMarksVal !== undefined && totalMarksVal > 0) {
+        if (Math.abs(totalMarksVal - subjTotalMarksVal) < 0.1) {
+          testCount = 1;
+        } else if (totalMarksVal / subjTotalMarksVal >= 1.5) {
+          testCount = 2;
+        }
+      }
+
+      stud.test_count = testCount;
+
+      if (testCount === 1) {
+        stud.t1_attendance = attendanceStatus;
+        stud.t2_attendance = "Absent";
+        if (attendanceStatus === "Present") {
+          stud.t1_scores = {
+            physics: physicsVal,
+            chemistry: chemistryVal,
+            maths: mathsVal
+          };
+          stud.t2_scores = {};
+        } else {
+          stud.t1_scores = {};
+          stud.t2_scores = {};
+        }
+      } else {
+        if (isT2) {
+          stud.t2_attendance = attendanceStatus;
+          if (attendanceStatus === "Present") {
+            stud.t2_scores = {
+              physics: physicsVal,
+              chemistry: chemistryVal,
+              maths: mathsVal
+            };
+          } else {
+            stud.t2_scores = {};
+          }
+        } else {
+          stud.t1_attendance = attendanceStatus;
+          if (attendanceStatus === "Present") {
+            stud.t1_scores = {
+              physics: physicsVal,
+              chemistry: chemistryVal,
+              maths: mathsVal
+            };
+          } else {
+            stud.t1_scores = {};
+          }
+        }
+      }
+    }
+
+    return Array.from(mergedMap.values());
+  }
+
+  // --- CASE 4: Test Attendance specific updates ---
+  if (activeMatrix === "attendance") {
+    const mergedMap = new Map<string, Student>();
+    existingStudents.forEach(s => {
+      mergedMap.set(s.id.toLowerCase(), { ...s });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length === 0 || !row.some(val => val !== "")) continue;
+
+      const id = getCellValue(row, colIndex.id);
+      if (!id) continue;
+      const key = id.toLowerCase();
+
+      const t1Att = colIndex.t1_attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.t1_attendance)) : undefined;
+      const t2Att = colIndex.t2_attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.t2_attendance)) : undefined;
+      const genAtt = colIndex.attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.attendance)) : undefined;
+
+      if (mergedMap.has(key)) {
+        const stud = mergedMap.get(key)!;
+        if (t1Att !== undefined) stud.t1_attendance = t1Att;
+        if (t2Att !== undefined) stud.t2_attendance = t2Att;
+        if (genAtt !== undefined) {
+          const tName = colIndex.test_name >= 0 ? getCellValue(row, colIndex.test_name).toLowerCase() : "";
+          const isT2 = tName.includes("2") || tName.includes("ii") || tName.includes("t2");
+          if (isT2) {
+            stud.t2_attendance = genAtt;
+          } else {
+            stud.t1_attendance = genAtt;
+          }
+        }
+      } else {
+        const name = getCellValue(row, colIndex.name) || `Student ${i}`;
+        const center = getCellValue(row, colIndex.center) || "Imported Center";
+        const grade = parseGrade(getCellValue(row, colIndex.grade));
+        mergedMap.set(key, {
+          id,
+          name,
+          grade,
+          center,
+          t1_attendance: t1Att ?? genAtt ?? "Present",
+          t2_attendance: t2Att ?? genAtt ?? "Present",
+          t1_scores: { physics: 75, chemistry: 75, maths: 75 },
+          t2_scores: { physics: 75, chemistry: 75, maths: 75 },
+          ioqm_score: 50,
+          retained: true
+        });
+      }
+    }
+    return Array.from(mergedMap.values());
+  }
+
+  // --- CASE 5: IOQM Achievement Score updates ---
+  if (activeMatrix === "ioqm") {
+    const mergedMap = new Map<string, Student>();
+    existingStudents.forEach(s => {
+      mergedMap.set(s.id.toLowerCase(), { ...s });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length === 0 || !row.some(val => val !== "")) continue;
+
+      const id = getCellValue(row, colIndex.id);
+      if (!id) continue;
+      const key = id.toLowerCase();
+
+      const ioqmVal = parsePercent(getCellValue(row, colIndex.ioqm_score));
+
+      if (mergedMap.has(key)) {
+        if (ioqmVal !== undefined) {
+          mergedMap.get(key)!.ioqm_score = ioqmVal;
+        }
+      } else {
+        const name = getCellValue(row, colIndex.name) || `Student ${i}`;
+        const center = getCellValue(row, colIndex.center) || "Imported Center";
+        const grade = parseGrade(getCellValue(row, colIndex.grade));
+        mergedMap.set(key, {
+          id,
+          name,
+          grade,
+          center,
+          t1_attendance: "Present",
+          t2_attendance: "Present",
+          t1_scores: { physics: 75, chemistry: 75, maths: 75 },
+          t2_scores: { physics: 75, chemistry: 75, maths: 75 },
+          ioqm_score: ioqmVal ?? 0,
+          retained: true
+        });
+      }
+    }
+    return Array.from(mergedMap.values());
+  }
+
+  // --- CASE 6: Ramp Up Test Score updates ---
+  if (activeMatrix === "rampup") {
+    const mergedMap = new Map<string, Student>();
+    existingStudents.forEach(s => {
+      mergedMap.set(s.id.toLowerCase(), { ...s });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length === 0 || !row.some(val => val !== "")) continue;
+
+      const id = getCellValue(row, colIndex.id);
+      if (!id) continue;
+      const key = id.toLowerCase();
+
+      const rampUpVal = parsePercent(getCellValue(row, colIndex.ramp_up_score));
+
+      if (mergedMap.has(key)) {
+        if (rampUpVal !== undefined) {
+          mergedMap.get(key)!.ramp_up_score = rampUpVal;
+        }
+      } else {
+        const name = getCellValue(row, colIndex.name) || `Student ${i}`;
+        const center = getCellValue(row, colIndex.center) || "Imported Center";
+        const grade = parseGrade(getCellValue(row, colIndex.grade));
+        mergedMap.set(key, {
+          id,
+          name,
+          grade,
+          center,
+          t1_attendance: "Present",
+          t2_attendance: "Present",
+          t1_scores: { physics: 75, chemistry: 75, maths: 75 },
+          t2_scores: { physics: 75, chemistry: 75, maths: 75 },
+          ioqm_score: 50,
+          ramp_up_score: rampUpVal,
+          retained: true
+        });
+      }
+    }
+    return Array.from(mergedMap.values());
+  }
+
+  // --- CASE 3: Standard pre-loaded / template export schema ---
   const studentsList: Student[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
-    if (row.length === 0 || !row.some(val => val !== "")) continue; // skip blank rows
+    if (row.length === 0 || !row.some(val => val !== "")) continue;
 
-    // Safe cell extractor
-    const cellValue = (idx: number): string => {
-      if (idx < 0 || idx >= row.length) return "";
-      return String(row[idx] || "").trim();
-    };
+    const id = getCellValue(row, colIndex.id) || `PW-IMPORTED-${1000 + i}`;
+    const name = getCellValue(row, colIndex.name) || `Student ${i}`;
+    const grade = parseGrade(getCellValue(row, colIndex.grade));
+    const center = getCellValue(row, colIndex.center) || "Imported Center";
+    const t1_attendance = parseAttendance(getCellValue(row, colIndex.t1_attendance));
+    const t2_attendance = parseAttendance(getCellValue(row, colIndex.t2_attendance));
 
-    const id = cellValue(colIndex.id) || `PW-IMPORTED-${1000 + i}`;
-    const name = cellValue(colIndex.name) || `Student ${i}`;
-    const grade = parseGrade(cellValue(colIndex.grade));
-    const center = cellValue(colIndex.center) || "Imported Center";
-    const t1_attendance = parseAttendance(cellValue(colIndex.t1_attendance));
-    const t2_attendance = parseAttendance(cellValue(colIndex.t2_attendance));
-
-    // Construct scores safely
     const t1_scores: SubjectScores = {};
     if (t1_attendance === "Present") {
-      const p = parsePercent(cellValue(colIndex.t1_physics));
-      const c = parsePercent(cellValue(colIndex.t1_chemistry));
-      const m = parsePercent(cellValue(colIndex.t1_maths));
+      const p = parsePercent(getCellValue(row, colIndex.t1_physics));
+      const c = parsePercent(getCellValue(row, colIndex.t1_chemistry));
+      const m = parsePercent(getCellValue(row, colIndex.t1_maths));
       if (p !== undefined) t1_scores.physics = p;
       if (c !== undefined) t1_scores.chemistry = c;
       if (m !== undefined) t1_scores.maths = m;
@@ -202,17 +562,29 @@ export function parseGoogleSheetRows(rows: any[][]): Student[] {
 
     const t2_scores: SubjectScores = {};
     if (t2_attendance === "Present") {
-      const p = parsePercent(cellValue(colIndex.t2_physics));
-      const c = parsePercent(cellValue(colIndex.t2_chemistry));
-      const m = parsePercent(cellValue(colIndex.t2_maths));
+      const p = parsePercent(getCellValue(row, colIndex.t2_physics));
+      const c = parsePercent(getCellValue(row, colIndex.t2_chemistry));
+      const m = parsePercent(getCellValue(row, colIndex.t2_maths));
       if (p !== undefined) t2_scores.physics = p;
       if (c !== undefined) t2_scores.chemistry = c;
       if (m !== undefined) t2_scores.maths = m;
     }
 
-    const ioqm_score = parsePercent(cellValue(colIndex.ioqm_score)) ?? 0;
-    const ramp_up_score = parsePercent(cellValue(colIndex.ramp_up_score));
-    const retained = parseRetained(cellValue(colIndex.retained));
+    const ioqm_score = parsePercent(getCellValue(row, colIndex.ioqm_score)) ?? 0;
+    const ramp_up_score = parsePercent(getCellValue(row, colIndex.ramp_up_score));
+    const retained = parseRetained(getCellValue(row, colIndex.retained));
+
+    // Detect test count based on total_marks and subject_total_marks
+    const totalMarksVal = colIndex.total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.total_marks)) : undefined;
+    const subjTotalMarksVal = colIndex.subject_total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.subject_total_marks)) : undefined;
+    let testCount = 2; // Default to 2
+    if (totalMarksVal !== undefined && subjTotalMarksVal !== undefined && totalMarksVal > 0) {
+      if (Math.abs(totalMarksVal - subjTotalMarksVal) < 0.1) {
+        testCount = 1;
+      } else if (totalMarksVal / subjTotalMarksVal >= 1.5) {
+        testCount = 2;
+      }
+    }
 
     studentsList.push({
       id,
@@ -220,12 +592,13 @@ export function parseGoogleSheetRows(rows: any[][]): Student[] {
       grade,
       center,
       t1_attendance,
-      t2_attendance,
+      t2_attendance: testCount === 1 ? "Absent" : t2_attendance,
       t1_scores,
-      t2_scores,
+      t2_scores: testCount === 1 ? {} : t2_scores,
       ioqm_score,
       ramp_up_score,
-      retained
+      retained,
+      test_count: testCount
     });
   }
 

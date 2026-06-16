@@ -1,6 +1,14 @@
-import type { SubjectScores, Student, CenterScores } from "./types";
+import { SubjectScores, Student, CenterScores } from "./types";
+import { getStudentPerformance, getActiveStudents } from "./metrics/shared";
+import { calculateSubjectiveTestScore } from "./metrics/subjectiveTest";
+import { calculateTestAttendanceScore } from "./metrics/testAttendance";
+import { calculateIoqmScore } from "./metrics/ioqmAchievement";
+import { calculateRampUpScore } from "./metrics/rampUp";
+import { calculateStudentRetentionScore } from "./metrics/studentRetention";
 
 export type { SubjectScores, Student, CenterScores };
+export { getStudentPerformance };
+
 
 // Pre-loaded realistic student test dataset
 export const PRELOADED_STUDENTS: Student[] = [
@@ -724,74 +732,6 @@ export const PRELOADED_STUDENTS: Student[] = [
 ];
 
 /**
- * Evaluates row-level data for a student and returns average score, active status and details.
- * Implements:
- *   - Rule A (Double Absence Exclusion): returns null if absent for both tests.
- *   - Rule B (Single Test Evaluation): uses strictly attended test for percentage.
- */
-export function getStudentPerformance(student: Student): {
-  isActive: boolean;
-  averagePercent: number | null;
-  subjectPapersCount: number;
-  failingPapersCount: number; // papers < 40%
-  papers: { name: string; score: number | undefined; test: 'T1'|'T2' }[];
-} {
-  const isT1Present = student.t1_attendance === "Present";
-  const isT2Present = student.t2_attendance === "Present";
-  
-  // Rule A: Double Absence Exclusion
-  if (!isT1Present && !isT2Present) {
-    return {
-      isActive: false,
-      averagePercent: null,
-      subjectPapersCount: 0,
-      failingPapersCount: 0,
-      papers: []
-    };
-  }
-
-  const papers: { name: string; score: number | undefined; test: 'T1'|'T2' }[] = [];
-  
-  // Collect actual subject papers based on attendance parameters
-  if (isT1Present) {
-    if (student.t1_scores.physics !== undefined) papers.push({ name: "Physics", score: student.t1_scores.physics, test: 'T1' });
-    if (student.t1_scores.chemistry !== undefined) papers.push({ name: "Chemistry", score: student.t1_scores.chemistry, test: 'T1' });
-    if (student.t1_scores.maths !== undefined) papers.push({ name: "Maths", score: student.t1_scores.maths, test: 'T1' });
-  }
-  
-  if (isT2Present) {
-    if (student.t2_scores.physics !== undefined) papers.push({ name: "Physics", score: student.t2_scores.physics, test: 'T2' });
-    if (student.t2_scores.chemistry !== undefined) papers.push({ name: "Chemistry", score: student.t2_scores.chemistry, test: 'T2' });
-    if (student.t2_scores.maths !== undefined) papers.push({ name: "Maths", score: student.t2_scores.maths, test: 'T2' });
-  }
-
-  if (papers.length === 0) {
-    return {
-      isActive: true,
-      averagePercent: 0,
-      subjectPapersCount: 0,
-      failingPapersCount: 0,
-      papers: []
-    };
-  }
-
-  // Rule B: Single-Test Evaluation or Combined Evaluation
-  // Sum of obtained marks divided by count of valid papers
-  const sumScores = papers.reduce((sum, p) => sum + (p.score || 0), 0);
-  const averagePercent = sumScores / papers.length;
-  
-  const failingPapersCount = papers.filter(p => (p.score || 0) < 40).length;
-
-  return {
-    isActive: true,
-    averagePercent,
-    subjectPapersCount: papers.length,
-    failingPapersCount,
-    papers
-  };
-}
-
-/**
  * Calculates complete center metrics for a given subset of students.
  * Crucial for dynamic "What-If" sliders where scores are modified on-the-fly.
  */
@@ -799,15 +739,9 @@ export function calculateCenterMetrics(
   centerName: string,
   students: Student[]
 ): Omit<CenterScores, "rank"> {
-  const centerStudents = students.filter(s => s.center === centerName);
-  
-  // Filter out double absences (Rule A)
-  const activeStudents = centerStudents.filter(s => {
-    const isT1Present = s.t1_attendance === "Present";
-    const isT2Present = s.t2_attendance === "Present";
-    return isT1Present || isT2Present;
-  });
-  
+  const centerStudents = centerName === "All Centers Combined" ? students : students.filter(s => s.center === centerName);
+  const activeStudents = getActiveStudents(centerStudents);
+
   if (activeStudents.length === 0) {
     return {
       centerName,
@@ -829,134 +763,37 @@ export function calculateCenterMetrics(
     };
   }
 
-  // 1. SUBJECTIVE TEST COMPONENT (Weight: 25%)
-  // Element A: % of active students with test average >= 90%.
-  let elementA_count = 0;
-  let totalPapers = 0;
-  let failingPapers = 0;
+  // 1. Subjective Test Metric (Weight: 25%)
+  const subjective = calculateSubjectiveTestScore(centerStudents);
 
-  activeStudents.forEach(s => {
-    const perf = getStudentPerformance(s);
-    if (perf.averagePercent !== null && perf.averagePercent >= 90) {
-      elementA_count++;
-    }
-    totalPapers += perf.subjectPapersCount;
-    failingPapers += perf.failingPapersCount;
-  });
+  // 2. Test Attendance (Weight: 10%)
+  const attendance = calculateTestAttendanceScore(centerStudents);
 
-  const elementA_percent = (elementA_count / activeStudents.length) * 100;
-  // If >= 15% of students hit this, award 100 marks. If 0-15%, scale linearly.
-  const elementA_score = elementA_percent >= 15 ? 100 : (elementA_percent / 15) * 100;
+  // 3. IOQM Achievement (Weight: 20%)
+  const ioqm = calculateIoqmScore(centerStudents);
 
-  // Element B: % of individual subject percentage entries < 40%.
-  const elementB_percent = totalPapers > 0 ? (failingPapers / totalPapers) * 100 : 0;
-  // If <= 5%, award 100 marks. If >= 15%, award 0 marks. If 5%-15%, drop linearly.
-  let elementB_score = 0;
-  if (elementB_percent <= 5) {
-    elementB_score = 100;
-  } else if (elementB_percent >= 15) {
-    elementB_score = 0;
-  } else {
-    elementB_score = 100 - (((elementB_percent - 5) / 10) * 100);
-  }
+  // 4. Ramp Up Tests (Weight: 15%)
+  const rampUp = calculateRampUpScore(centerStudents);
 
-  const subjectiveTestScore = (elementA_score * 0.6) + (elementB_score * 0.4);
-
-  // 2. TEST ATTENDANCE (Weight: 10%)
-  // Average attendance of active pool across 2 tests
-  let totalAttendanceOpportunities = activeStudents.length * 2;
-  let attendedCount = 0;
-  activeStudents.forEach(s => {
-    if (s.t1_attendance === "Present") attendedCount++;
-    if (s.t2_attendance === "Present") attendedCount++;
-  });
-  const attendance_percent = totalAttendanceOpportunities > 0 
-    ? (attendedCount / totalAttendanceOpportunities) * 100 
-    : 0;
-  
-  // >75% = 100 marks; <50% = 0 marks; 50-75% linear scale
-  let testAttendanceScore = 0;
-  if (attendance_percent > 75) {
-    testAttendanceScore = 100;
-  } else if (attendance_percent < 50) {
-    testAttendanceScore = 0;
-  } else {
-    testAttendanceScore = ((attendance_percent - 50) / 25) * 100;
-  }
-
-  // 3. IOQM ACHIEVEMENT (Weight: 20%)
-  // Average IOQM score for active students
-  const totalIoqm = activeStudents.reduce((sum, s) => sum + s.ioqm_score, 0);
-  const ioqm_percent = activeStudents.length > 0 ? totalIoqm / activeStudents.length : 0;
-  // <40% = 0; >90% = 100; 40-90% linear scale
-  let ioqmScore = 0;
-  if (ioqm_percent > 90) {
-    ioqmScore = 100;
-  } else if (ioqm_percent < 40) {
-    ioqmScore = 0;
-  } else {
-    ioqmScore = ((ioqm_percent - 40) / 50) * 100;
-  }
-
-  // 4. RAMP UP TESTS (Weight: 15%)
-  // % of 9th/10th graders in active student pool with ramp_up_score > 80%
-  const activeRampStudents = activeStudents.filter(s => s.grade === "9" || s.grade === "10");
-  const rampToppers = activeRampStudents.filter(s => s.ramp_up_score !== undefined && s.ramp_up_score > 80);
-  const rampUp_percent = activeRampStudents.length > 0 
-    ? (rampToppers.length / activeRampStudents.length) * 100 
-    : 0;
-
-  // <1% = 0; >5% = 100; 1-5% linear scale
-  let rampUpScore = 0;
-  if (rampUp_percent > 5) {
-    rampUpScore = 100;
-  } else if (rampUp_percent < 1) {
-    rampUpScore = 0;
-  } else {
-    rampUpScore = ((rampUp_percent - 1) / 4) * 100;
-  }
-
-  // 5. STUDENT RETENTION (Weight: 30%)
-  // % of retained pupils across active pool
-  const retainedCount = activeStudents.filter(s => s.retained).length;
-  const retention_percent = activeStudents.length > 0 
-    ? (retainedCount / activeStudents.length) * 100 
-    : 100;
-
-  // <75% = 0; >=95% = 100; 75-95% linear scale
-  let studentRetentionScore = 0;
-  if (retention_percent >= 95) {
-    studentRetentionScore = 100;
-  } else if (retention_percent < 75) {
-    studentRetentionScore = 0;
-  } else {
-    studentRetentionScore = ((retention_percent - 75) / 20) * 100;
-  }
+  // 5. Student Retention (Weight: 30%)
+  const retention = calculateStudentRetentionScore(centerStudents);
 
   // Calculate Consolidated Center Score
   const consolidatedScore = 
-    (subjectiveTestScore * 0.25) +
-    (ioqmScore * 0.20) +
-    (rampUpScore * 0.15) +
-    (testAttendanceScore * 0.10) +
-    (studentRetentionScore * 0.30);
+    (subjective.subjectiveTestScore * 0.25) +
+    (ioqm.ioqmScore * 0.20) +
+    (rampUp.rampUpScore * 0.15) +
+    (attendance.testAttendanceScore * 0.10) +
+    (retention.studentRetentionScore * 0.30);
 
   return {
     centerName,
     activeStudents: activeStudents.length,
-    subjectiveTestScore,
-    elementA_percent,
-    elementA_score,
-    elementB_percent,
-    elementB_score,
-    testAttendanceScore,
-    attendance_percent,
-    ioqmScore,
-    ioqm_percent,
-    rampUpScore,
-    rampUp_percent,
-    studentRetentionScore,
-    retention_percent,
+    ...subjective,
+    ...attendance,
+    ...ioqm,
+    ...rampUp,
+    ...retention,
     consolidatedScore
   };
 }

@@ -10,6 +10,21 @@ export interface Student {
   grade: "9" | "10" | "11" | "12";
   center: string;
   
+  // Custom retention and results original fields
+  region?: string;
+  batch?: string;
+  defaulter_status?: string;
+  admission_cancellation?: string;
+  inactive?: string;
+  test_date?: string;
+  test_name?: string;
+  attendance?: string;
+  sst_pct?: number;
+  urdu_pct?: number;
+  maths_pct?: number;
+  english_pct?: number;
+  science_pct?: number;
+
   // Attendance for the latest 2 test windows
   t1_attendance: "Present" | "Absent";
   t2_attendance: "Present" | "Absent";
@@ -28,6 +43,9 @@ export interface Student {
   
   // Retention status
   retained: boolean;
+
+  // Active tests count (1 or 2)
+  test_count?: number;
 }
 
 export interface CenterScores {

@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "student": {
+      "title": "Student",
+      "description": "Student tracking record and mock academic result",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "grade": { "type": "string" },
+        "center": { "type": "string" },
+        "t1_attendance": { "type": "string" },
+        "t2_attendance": { "type": "string" },
+        "t1_scores": { "type": "object" },
+        "t2_scores": { "type": "object" },
+        "ioqm_score": { "type": "number" },
+        "ramp_up_score": { "type": "number" },
+        "retained": { "type": "boolean" }
+      },
+      "required": ["id", "name", "grade", "center", "t1_attendance", "t2_attendance", "t1_scores", "t2_scores", "ioqm_score", "retained"]
+    },
+    "simulation": {
+      "title": "SimulationState",
+      "description": "Simulation coaching state saving active coached student IDs and selected center across session reloads",
+      "type": "object",
+      "properties": {
+        "coachedStudentIds": {
+          "type": "array"
+        },
+        "selectedCenterName": {
+          "type": "string"
+        }
+      },
+      "required": ["coachedStudentIds", "selectedCenterName"]
+    }
+  },
+  "firestore": {
+    "students/{studentId}": {
+      "schema": "student",
+      "description": "Custom student ledger uploaded or synchronized from Google sheets or Excel workout templates"
+    },
+    "coaching/current": {
+      "schema": "simulation",
+      "description": "Active coached list and center state to make simulation persistent across reloads"
+    }
+  }
+}
