@@ -1812,6 +1812,40 @@ export default function App() {
           </div>
           
           <div className="flex flex-wrap items-center gap-3 text-xs font-mono bg-slate-950/60 px-4 py-2 rounded-md border border-slate-800">
+            {googleUser && (
+              <>
+                <div className="flex items-center gap-2 mr-2">
+                  {googleUser.photoURL ? (
+                    <img
+                      src={googleUser.photoURL}
+                      alt={googleUser.displayName || "User"}
+                      referrerPolicy="no-referrer"
+                      className="w-5 h-5 rounded-full border border-slate-700"
+                    />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-bold text-[10px]">
+                      {String(googleUser.displayName || "U").charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="text-slate-300 font-sans truncate max-w-[120px]" title={googleUser.email}>
+                    {googleUser.displayName || googleUser.email}
+                  </span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+                    isAdmin ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
+                  }`}>
+                    {isAdmin ? "Admin" : "Viewer"}
+                  </span>
+                </div>
+                <button
+                  onClick={handleDisconnectGoogle}
+                  className="bg-slate-800 hover:bg-slate-750 text-slate-300 px-2.5 py-1 rounded text-[10px] font-sans font-bold transition flex items-center gap-1 cursor-pointer"
+                >
+                  <LogOut className="w-3 h-3 text-rose-455 text-rose-400 whitespace-nowrap" />
+                  Sign Out
+                </button>
+                <span className="text-slate-800 font-sans">|</span>
+              </>
+            )}
             <span className="text-slate-400">Academic Session: <strong className="text-yellow-400">2026-27</strong></span>
             <span className="text-slate-600">|</span>
             <span className="text-slate-400">Windows evaluated: <strong className="text-cyan-400">T1 & T2 (Latest 2)</strong></span>
@@ -1842,42 +1876,44 @@ export default function App() {
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6" id="dashboard-main">
         
         {/* GOOGLE SHEETS RIBBON CARDS */}
-        <section className={`lg:col-span-12 bg-slate-900 border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-300 ${
-          hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-800"
-        }`} id="google-sheets-widget">
-          <DailyLedgerImporter
-            students={students}
-            hasImportedData={hasImportedData}
-            isImporting={isImporting}
-            importError={importError}
-            dragActive={dragActive}
-            showTemplateModal={showTemplateModal}
-            copiedTemplate={copiedTemplate}
-            handleResetToDefaultDemo={handleResetToDefaultDemo}
-            handleWipeAllData={handleWipeAllData}
-            handleCopyTemplateCSV={handleCopyTemplateCSV}
-            handleDownloadSampleCSV={handleDownloadSampleCSV}
-            handleDownloadActiveXLSX={handleDownloadActiveXLSX}
-            handleDownloadRetentionXLSX={handleDownloadRetentionXLSX}
-            handleDownloadResultsXLSX={handleDownloadResultsXLSX}
-            handleDownloadAttendanceXLSX={handleDownloadAttendanceXLSX}
-            handleDownloadIoqmXLSX={handleDownloadIoqmXLSX}
-            handleDownloadRampUpXLSX={handleDownloadRampUpXLSX}
-            selectedUploadMatrix={selectedUploadMatrix}
-            setSelectedUploadMatrix={setSelectedUploadMatrix}
-            handleDrag={handleDrag}
-            handleDrop={handleDrop}
-            handleFileChange={handleFileChange}
-            setShowTemplateModal={setShowTemplateModal}
-            isAdmin={isAdmin}
-            googleUser={googleUser}
-            handleGoogleLogin={handleGoogleLogin}
-            authError={authError}
-            setAuthError={setAuthError}
-            customAdmins={customAdmins}
-            setCustomAdmins={setCustomAdmins}
-          />
-        </section>
+        {(!googleUser || isAdmin) && (
+          <section className={`lg:col-span-12 bg-slate-900 border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-300 ${
+            hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-800"
+          }`} id="google-sheets-widget">
+            <DailyLedgerImporter
+              students={students}
+              hasImportedData={hasImportedData}
+              isImporting={isImporting}
+              importError={importError}
+              dragActive={dragActive}
+              showTemplateModal={showTemplateModal}
+              copiedTemplate={copiedTemplate}
+              handleResetToDefaultDemo={handleResetToDefaultDemo}
+              handleWipeAllData={handleWipeAllData}
+              handleCopyTemplateCSV={handleCopyTemplateCSV}
+              handleDownloadSampleCSV={handleDownloadSampleCSV}
+              handleDownloadActiveXLSX={handleDownloadActiveXLSX}
+              handleDownloadRetentionXLSX={handleDownloadRetentionXLSX}
+              handleDownloadResultsXLSX={handleDownloadResultsXLSX}
+              handleDownloadAttendanceXLSX={handleDownloadAttendanceXLSX}
+              handleDownloadIoqmXLSX={handleDownloadIoqmXLSX}
+              handleDownloadRampUpXLSX={handleDownloadRampUpXLSX}
+              selectedUploadMatrix={selectedUploadMatrix}
+              setSelectedUploadMatrix={setSelectedUploadMatrix}
+              handleDrag={handleDrag}
+              handleDrop={handleDrop}
+              handleFileChange={handleFileChange}
+              setShowTemplateModal={setShowTemplateModal}
+              isAdmin={isAdmin}
+              googleUser={googleUser}
+              handleGoogleLogin={handleGoogleLogin}
+              authError={authError}
+              setAuthError={setAuthError}
+              customAdmins={customAdmins}
+              setCustomAdmins={setCustomAdmins}
+            />
+          </section>
+        )}
 
         {false && (
           <section id="old-google-sheets-widget">
