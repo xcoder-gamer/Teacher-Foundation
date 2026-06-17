@@ -78,6 +78,9 @@ import {
   HelpCircle,
   RefreshCw,
   Sparkles,
+  Lock,
+  Shield,
+  User,
   ChevronRight,
   TrendingDown,
   Info,
@@ -170,6 +173,8 @@ export default function App() {
   // --- REAL GOOGLE SHEETS & FIREBASE AUTHENTICATION MECHANISMS ---
   const [googleUser, setGoogleUser] = useState<any>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [passcode, setPasscode] = useState<string>("");
+  const [passcodeError, setPasscodeError] = useState<string>("");
   const [copiedDomain, setCopiedDomain] = useState<boolean>(false);
   const [spreadsheetInput, setSpreadsheetInput] = useState<string>("");
   const [sheetRangeInput, setSheetRangeInput] = useState<string>("");
@@ -207,6 +212,28 @@ export default function App() {
       setGoogleUser(null);
     } catch (e) {
       console.error("Logout failed:", e);
+    }
+  };
+
+  const handlePasscodeLogin = () => {
+    if (passcode.toLowerCase() === "admin") {
+      setGoogleUser({
+        email: "gurukul.ops@pw.live",
+        displayName: "Demo Administrator",
+        photoURL: ""
+      });
+      setPasscodeError("");
+    } else if (passcode.toLowerCase() === "viewer") {
+      setGoogleUser({
+        email: "guest.viewer@pw.live",
+        displayName: "Guest Educator",
+        photoURL: ""
+      });
+      setPasscodeError("");
+    } else if (passcode.trim() !== "") {
+      setPasscodeError("Invalid demo passcode. Try 'admin'.");
+    } else {
+      setPasscodeError("Please enter a passcode.");
     }
   };
 
@@ -1794,6 +1821,121 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans" id="teacher-analytics-app">
+      {!googleUser ? (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-6 relative overflow-hidden font-sans w-full" id="login-gateway">
+          {/* Ambient Grid Background */}
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(26,54,93,0.15)_0,transparent_100%)] pointer-events-none" />
+          
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-8 space-y-6 relative z-10 animate-fade-in">
+            {/* Logo Heading */}
+            <div className="text-center space-y-2">
+              <div className="inline-block bg-yellow-500 text-slate-950 px-4 py-2 rounded-xl font-black font-display tracking-wider text-2xl shadow-xl shadow-yellow-500/10">
+                PHYSICS WALLAH
+              </div>
+              <h2 className="text-xl font-bold font-display tracking-tight text-slate-100 mt-4">
+                Regional Center Standing Gateway
+              </h2>
+              <p className="text-xs text-slate-400">
+                Comprehensive analytics, national standing scores & action drill-downs.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Authentications Section */}
+              <div className="bg-slate-950/60 p-5 rounded-xl border border-slate-800/80 space-y-3.5">
+                <h3 className="text-xs font-bold font-mono text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-cyan-400 shrink-0" /> Google Workspace Login
+                </h3>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Connect your official <code>@pw.live</code> account to sync spreadsheet files and make administrative adjustments.
+                </p>
+                
+                <button
+                  onClick={handleGoogleLogin}
+                  className="w-full bg-cyan-600 hover:bg-cyan-500 hover:text-white text-slate-50 font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer active:scale-98 shadow-md text-xs font-sans"
+                >
+                  <svg className="w-4 h-4 fill-current shrink-0" viewBox="0 0 24 24">
+                    <path d="M12.24 10.285V13.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.86-3.577-7.86-8s3.53-8 7.86-8c2.46 0 4.105 1.025 5.047 1.926l2.427-2.334C18.155 1.036 15.422 0 12.24 0c-6.63 0-12 5.37-12 12s5.37 12 12 12c6.92 0 11.52-4.84 11.52-11.72 0-.788-.085-1.39-.188-1.995H12.24z"/>
+                  </svg>
+                  <span>Sign In with Google</span>
+                </button>
+
+                {authError && (
+                  <div className="bg-rose-500/15 text-rose-400 text-[11px] p-2.5 rounded-lg border border-rose-500/20 text-center">
+                    ⚠️ {authError === "unauthorized-domain" ? "This Google account is unauthorized. Please log in with an approved administrator account or proceed as a Normal User below." : authError}
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Guest Entrance */}
+              <div className="bg-slate-950/40 p-5 rounded-xl border border-slate-800/60 text-center space-y-3">
+                <h4 className="text-[11px] font-bold font-mono text-slate-400 uppercase tracking-widest">
+                  👉 Are you a general user / center lead?
+                </h4>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Click below to proceed as a <strong>Standard Participant</strong>. You will access the <strong>National Leaderboard</strong> immediately.
+                </p>
+                <button
+                  onClick={() => {
+                    setGoogleUser({
+                      email: "guest.viewer@pw.live",
+                      displayName: "Guest Educator",
+                      photoURL: ""
+                    });
+                  }}
+                  className="w-full bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-slate-50 font-bold py-2.5 px-4 rounded-xl transition cursor-pointer text-xs font-sans shadow border border-slate-700/60"
+                >
+                  Proceed as Normal User (Leaderboard Only)
+                </button>
+              </div>
+
+              {/* Demo admin Bypass Passcode */}
+              <div className="bg-slate-950/40 p-5 rounded-xl border border-slate-800/60 space-y-3">
+                <h4 className="text-[11px] font-bold font-mono text-yellow-500 uppercase tracking-widest flex items-center gap-1">
+                  <Shield className="w-3.5 h-3.5 text-yellow-550 mr-1" /> Demo Admin Access
+                </h4>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Type <code>admin</code> (demo credentials) to unlock all charts, data importers, and academic diagnostics.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    placeholder="Enter passcode..."
+                    value={passcode}
+                    onChange={(e) => {
+                      setPasscode(e.target.value);
+                      setPasscodeError("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        handlePasscodeLogin();
+                      }
+                    }}
+                    className="bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs px-3 py-1.5 focus:outline-none focus:border-yellow-500 w-full font-mono placeholder:text-slate-600"
+                  />
+                  <button
+                    onClick={handlePasscodeLogin}
+                    className="bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold text-xs py-1.5 px-4 rounded-lg transition whitespace-nowrap cursor-pointer active:scale-98 shadow hover:shadow-yellow-500/5 font-sans"
+                  >
+                    Verify Key
+                  </button>
+                </div>
+                {passcodeError && (
+                  <p className="text-[10px] text-rose-400 font-medium text-center">
+                    ❌ {passcodeError}
+                  </p>
+                )}
+              </div>
+
+            </div>
+
+            <div className="text-center text-[10px] text-slate-500 font-mono">
+              Physics Wallah Academic Operations Audit Portal • 2026-27
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
       {/* 1. TOP HEADER BANNER */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50 px-6 py-4" id="portal-header">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -2939,8 +3081,10 @@ export default function App() {
           </div>
         </section>
 
-        {/* 2. LEFT PANEL: ALL CENTERS LEADERBOARD PROGRESS */}
-        <section className="lg:col-span-4 space-y-4" id="leaderboard-section">
+        {isAdmin && (
+          <>
+            {/* 2. LEFT PANEL: ALL CENTERS LEADERBOARD PROGRESS */}
+            <section className="lg:col-span-4 space-y-4" id="leaderboard-section">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
             <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-2">
               <div>
@@ -5193,12 +5337,16 @@ export default function App() {
           )}
 
         </section>
+          </>
+        )}
       </main>
 
       {/* FOOTER */}
       <footer className="border-t border-slate-800 bg-slate-900/40 p-6 text-center text-xs text-slate-500 font-mono mt-12">
         <p>© 2026 Physics Wallah (PW) Regional Center Leads Evaluation Portal. All diagnostic data audited and tracked recursively.</p>
       </footer>
+        </>
+      )}
     </div>
   );
 }
