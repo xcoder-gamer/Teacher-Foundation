@@ -1779,14 +1779,14 @@ export default function App() {
           </div>
 
           <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-805 border-slate-800">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono block">Metric Name</span>
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono block">{tabLabelNoWeight}</span>
             <div className="flex items-center justify-center gap-1.5 mt-1">
               <span className="text-[11px] font-mono text-slate-400 line-through">{baseMetricVal.toFixed(1)}</span>
               <span className="text-slate-500 text-xs">→</span>
               <span className="text-sm font-mono font-bold text-slate-100">{simMetricVal.toFixed(1)}</span>
             </div>
             <span className={`text-[10px] font-bold block mt-1 ${metricColor}`}>
-              {tabLabelNoWeight}
+              {(simMetricVal - baseMetricVal) > 0 ? `+${(simMetricVal - baseMetricVal).toFixed(1)}% Change` : "0.0% Change"}
             </span>
           </div>
 
@@ -3081,7 +3081,8 @@ export default function App() {
           </div>
         </section>
 
-
+        {isAdmin && (
+          <>
             {/* 2. LEFT PANEL: ALL CENTERS LEADERBOARD PROGRESS */}
             <section className="lg:col-span-4 space-y-4" id="leaderboard-section">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
@@ -5274,6 +5275,8 @@ export default function App() {
           )}
 
         </section>
+          </>
+        )}
       </main>
 
       {/* FOOTER */}
