@@ -3081,8 +3081,6 @@ export default function App() {
           </div>
         </section>
 
-        {isAdmin && (
-          <>
             {/* 2. LEFT PANEL: ALL CENTERS LEADERBOARD PROGRESS */}
             <section className="lg:col-span-4 space-y-4" id="leaderboard-section">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
@@ -5275,8 +5273,6 @@ export default function App() {
           )}
 
         </section>
-          </>
-        )}
       </main>
 
       {/* FOOTER */}
