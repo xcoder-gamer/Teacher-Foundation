@@ -4671,69 +4671,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* RETENTION ROSTER SHEET */}
-                <div className="pt-4 border-t border-slate-800">
-                  <h3 className="font-semibold text-slate-300 text-sm mb-3">
-                    📊 Retention Outflow Recovery Tracker
-                  </h3>
-                  <div className="overflow-x-auto border border-slate-800 rounded-lg">
-                    <table className="w-full text-left text-xs bg-slate-950 font-sans">
-                      <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800">
-                        <tr>
-                          <th className="p-3">Student Name</th>
-                          <th className="p-3">Reference ID</th>
-                          <th className="p-3">Outflow Status</th>
-                          <th className="p-3">Predicted Retention Rate Shift</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-850 text-slate-300">
-                        {paginatedRetentionItems.map(({ student, action }) => {
-                          const isCoached = coachedStudentIds.includes(student.id);
-                          return (
-                            <tr key={student.id} className="hover:bg-slate-900/40">
-                              <td className="p-3 font-semibold text-slate-200">{student.name}</td>
-                              <td className="p-3 text-slate-400 font-mono">{student.id}</td>
-                              <td className="p-3 text-rose-400 font-mono font-bold">Unretained</td>
-                              <td className="p-3 text-emerald-400 font-medium font-sans">
-                                {isCoached ? "Predicted: Retained" : "Outreach counseling needed"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
 
-                  {/* RETENTION PAGINATION CONTROLS */}
-                  {retentionTotalPages > 1 && (
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 font-sans">
-                      <div className="text-[11px] font-mono text-slate-500">
-                        Showing {Math.min(filteredRetentionItems.length, (retentionPage - 1) * retentionPageSize + 1)}–{Math.min(filteredRetentionItems.length, retentionPage * retentionPageSize)} of {filteredRetentionItems.length} students
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setRetentionPage((p) => Math.max(1, p - 1))}
-                          disabled={retentionPage === 1}
-                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
-                        >
-                          ◀ Prev
-                        </button>
-                        <span className="font-mono text-slate-300">
-                          Page {retentionPage} of {retentionTotalPages}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setRetentionPage((p) => Math.min(retentionTotalPages, p + 1))}
-                          disabled={retentionPage === retentionTotalPages}
-                          className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800/80 text-slate-300 hover:bg-slate-900 transition disabled:opacity-40 disabled:hover:bg-slate-950 font-mono font-bold cursor-pointer"
-                        >
-                          Next ▶
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
               </div>
             </div>
           )}
