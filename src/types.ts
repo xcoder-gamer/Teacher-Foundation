@@ -12,12 +12,14 @@ export interface Student {
   
   // Custom retention and results original fields
   region?: string;
+  combined_center?: string;
   batch?: string;
   defaulter_status?: string;
   admission_cancellation?: string;
   inactive?: string;
   test_date?: string;
   test_name?: string;
+  test_no?: string;
   attendance?: string;
   sst_pct?: number;
   urdu_pct?: number;
@@ -52,6 +54,8 @@ export interface CenterScores {
   centerName: string;
   rank: number;
   activeStudents: number;
+  region?: string;
+  combined_center?: string;
   
   // Component scores (out of 100)
   subjectiveTestScore: number;

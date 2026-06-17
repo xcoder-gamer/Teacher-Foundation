@@ -1,13 +1,31 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-import firebaseConfig from "../firebase-applet-config.json";
+import defaultFirebaseConfig from "../firebase-applet-config.json";
 import { Student, SubjectScores } from "./types";
 
+// Load custom firebase configurations if configured by the user
+const getActiveFirebaseConfig = () => {
+  try {
+    const saved = localStorage.getItem("custom_firebase_config");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed === "object" && parsed.projectId) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn("Could not read custom Firebase config from localStorage", e);
+  }
+  return defaultFirebaseConfig;
+};
+
+export const activeFirebaseConfig = getActiveFirebaseConfig();
+
 // Initialize Firebase App
-const app = initializeApp(firebaseConfig);
+const app = initializeApp(activeFirebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app, activeFirebaseConfig.firestoreDatabaseId);
 
 const provider = new GoogleAuthProvider();
 
@@ -87,7 +105,8 @@ export function parseSpreadsheetRowsToStudents(
     id: sanitizedHeaders.findIndex(h => ["id", "regno", "registrationnumber", "studentid", "rollno", "rollnumber"].includes(h) || h === "id" || h.includes("studentid") || h.includes("registrationnumber") || h.includes("rollnumber") || h.includes("rollno") || h.includes("regno")),
     name: sanitizedHeaders.findIndex(h => ["name", "studentname", "student", "nameofstudents", "nameofstudent"].includes(h) || h.includes("studentname") || h.includes("name") || h.includes("nameofstudent")),
     grade: sanitizedHeaders.findIndex(h => ["grade", "class", "division", "standard", "cohort", "grade9or10"].includes(h) || h.includes("grade") || h.includes("class") || h.includes("cohort")),
-    center: sanitizedHeaders.findIndex(h => ["center", "centername", "branch", "combinedcenter", "combined_center"].includes(h) || h.includes("center") || h.includes("combinedcenter")),
+    center: sanitizedHeaders.findIndex(h => ["center", "centername", "branch", "centrename"].includes(h) || (h.includes("center") && !h.includes("combined"))),
+    combined_center: sanitizedHeaders.findIndex(h => ["combinedcenter", "combined_center", "combined_centre", "combcenter"].includes(h) || h.includes("combined")),
     
     // extra details columns
     region: sanitizedHeaders.findIndex(h => ["region", "state", "zone"].includes(h) || h === "region" || h.includes("region")),
@@ -100,9 +119,12 @@ export function parseSpreadsheetRowsToStudents(
     retention: sanitizedHeaders.findIndex(h => ["retained", "isretained", "retention", "activestatus"].includes(h) || h.includes("retained") || h.includes("retention")),
 
     // result specific columns
+    test_no: sanitizedHeaders.findIndex(h => ["testno", "test_no", "testnumber"].includes(h) || h === "testno" || h.includes("testno") || h.includes("test_no")),
     test_name: sanitizedHeaders.findIndex(h => ["testname", "test", "examname", "test_name"].includes(h) || h.includes("testname") || h.includes("test_name")),
     test_date: sanitizedHeaders.findIndex(h => ["testdate", "date", "test_date"].includes(h) || h.includes("date") || h.includes("test_date")),
-    attendance: sanitizedHeaders.findIndex(h => ["attendance", "present", "attstatus"].includes(h) || h.includes("attendance")),
+    attendance: sanitizedHeaders.findIndex(h => ["attendance", "present", "attstatus", "testattendance", "testattndance"].includes(h) || h.includes("attendance") || h.includes("attndance")),
+    test_attendance: sanitizedHeaders.findIndex(h => ["testattendance", "testattndance"].includes(h) || h.includes("attendance") || h.includes("attndance")),
+    total_subject: sanitizedHeaders.findIndex(h => ["totalsubject", "totalsub"].includes(h) || h.includes("totalsubject")),
     maths_pct: sanitizedHeaders.findIndex(h => ["mathspct", "mathpct", "maths", "maths_pct"].includes(h) || h.includes("maths")),
     science_pct: sanitizedHeaders.findIndex(h => ["sciencepct", "science", "sci", "science_pct"].includes(h) || h.includes("science") || h === "sci"),
     english_pct: sanitizedHeaders.findIndex(h => ["englishpct", "english", "eng", "english_pct"].includes(h) || h.includes("english")),
@@ -214,6 +236,7 @@ export function parseSpreadsheetRowsToStudents(
 
       const key = id.toLowerCase();
       const regValue = getCellValue(row, colIndex.region) || "Rajasthan";
+      const combCenterValue = getCellValue(row, colIndex.combined_center) || (center.includes("Combined") ? center : (center + " Combined"));
       const batValue = getCellValue(row, colIndex.batch) || "11-NF101EA";
       const defStatusVal = getCellValue(row, colIndex.defaulter_status) || "Not Defaulter";
       const admCancelVal = getCellValue(row, colIndex.admission_cancellation);
@@ -226,6 +249,7 @@ export function parseSpreadsheetRowsToStudents(
         existingStudent.grade = grade;
         existingStudent.retained = isRetained;
         existingStudent.region = regValue;
+        existingStudent.combined_center = combCenterValue;
         existingStudent.batch = batValue;
         existingStudent.defaulter_status = defStatusVal;
         existingStudent.admission_cancellation = admCancelVal;
@@ -243,6 +267,7 @@ export function parseSpreadsheetRowsToStudents(
           ioqm_score: 50,
           retained: isRetained,
           region: regValue,
+          combined_center: combCenterValue,
           batch: batValue,
           defaulter_status: defStatusVal,
           admission_cancellation: admCancelVal,
@@ -329,10 +354,16 @@ export function parseSpreadsheetRowsToStudents(
       stud.center = center;
       stud.grade = grade;
       
+      const regValue = getCellValue(row, colIndex.region);
+      if (regValue) stud.region = regValue;
+      const combCenterValue = getCellValue(row, colIndex.combined_center);
+      if (combCenterValue) stud.combined_center = combCenterValue;
+      
       // Save original values
       stud.batch = getCellValue(row, colIndex.batch) || "44-UP121ES";
       stud.test_date = getCellValue(row, colIndex.test_date) || "25 May, 2026";
       stud.test_name = testName;
+      stud.test_no = colIndex.test_no >= 0 ? getCellValue(row, colIndex.test_no) : "Test 1";
       stud.attendance = getCellValue(row, colIndex.attendance) || (attendanceStatus === "Present" ? "Present" : "Absent");
       stud.sst_pct = sstScore ?? physicsVal;
       stud.urdu_pct = urduScore ?? chemistryVal;
@@ -417,30 +448,62 @@ export function parseSpreadsheetRowsToStudents(
       const t2Att = colIndex.t2_attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.t2_attendance)) : undefined;
       const genAtt = colIndex.attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.attendance)) : undefined;
 
+      // Extract ratio-based attendance (e.g., 2/4 means Present, 0/4 means Absent)
+      let parsedAttendanceStatus: "Present" | "Absent" | undefined = undefined;
+      
+      const testAttVal = colIndex.test_attendance >= 0 ? getCellValue(row, colIndex.test_attendance) : "";
+      if (testAttVal !== "") {
+        const valNum = parseFloat(testAttVal.replace(/[^0-9.-]/g, ""));
+        if (!isNaN(valNum)) {
+          parsedAttendanceStatus = valNum > 0 ? "Present" : "Absent";
+        }
+      }
+      
+      const totalSubVal = colIndex.total_subject >= 0 ? getCellValue(row, colIndex.total_subject) : "";
+      if (totalSubVal !== "" && parsedAttendanceStatus === undefined) {
+        if (totalSubVal.includes("/")) {
+          const numSg = parseInt(totalSubVal.split("/")[0]);
+          if (!isNaN(numSg)) {
+            parsedAttendanceStatus = numSg > 0 ? "Present" : "Absent";
+          }
+        } else {
+          const numSg = parseInt(totalSubVal);
+          if (!isNaN(numSg)) {
+            parsedAttendanceStatus = numSg > 0 ? "Present" : "Absent";
+          }
+        }
+      }
+
+      const finalStatus = parsedAttendanceStatus ?? genAtt;
+      const tNo = colIndex.test_no >= 0 ? getCellValue(row, colIndex.test_no).toLowerCase() : "";
+      const isT2 = tNo.includes("2") || tNo.includes("ii") || tNo.includes("t2");
+
       if (mergedMap.has(key)) {
         const stud = mergedMap.get(key)!;
         if (t1Att !== undefined) stud.t1_attendance = t1Att;
         if (t2Att !== undefined) stud.t2_attendance = t2Att;
-        if (genAtt !== undefined) {
-          const tName = colIndex.test_name >= 0 ? getCellValue(row, colIndex.test_name).toLowerCase() : "";
-          const isT2 = tName.includes("2") || tName.includes("ii") || tName.includes("t2");
+        if (finalStatus !== undefined) {
           if (isT2) {
-            stud.t2_attendance = genAtt;
+            stud.t2_attendance = finalStatus;
           } else {
-            stud.t1_attendance = genAtt;
+            stud.t1_attendance = finalStatus;
           }
         }
       } else {
         const name = getCellValue(row, colIndex.name) || `Student ${i}`;
         const center = getCellValue(row, colIndex.center) || "Imported Center";
         const grade = parseGrade(getCellValue(row, colIndex.grade));
+        
+        const finalT1 = !isT2 ? (finalStatus ?? t1Att ?? "Present") : (t1Att ?? "Present");
+        const finalT2 = isT2 ? (finalStatus ?? t2Att ?? "Present") : (t2Att ?? "Present");
+
         mergedMap.set(key, {
           id,
           name,
           grade,
           center,
-          t1_attendance: t1Att ?? genAtt ?? "Present",
-          t2_attendance: t2Att ?? genAtt ?? "Present",
+          t1_attendance: finalT1,
+          t2_attendance: finalT2,
           t1_scores: { physics: 75, chemistry: 75, maths: 75 },
           t2_scores: { physics: 75, chemistry: 75, maths: 75 },
           ioqm_score: 50,

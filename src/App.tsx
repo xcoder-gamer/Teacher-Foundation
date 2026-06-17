@@ -6,6 +6,8 @@ import {
   calculateCenterMetrics,
   Student,
   CenterScores,
+  getRankedMetricGroups,
+  getStudentRegionAndCombinedCenter,
 } from "./data";
 import {
   parseSpreadsheetRowsToStudents,
@@ -92,6 +94,8 @@ import {
   ExternalLink,
   Upload,
   UserCheck,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
 } from "lucide-react";
 import {
   BarChart,
@@ -113,11 +117,19 @@ export default function App() {
   // --- STATES ---
   const [students, setStudents] = useState<Student[]>(PRELOADED_STUDENTS);
   const [selectedCenterName, setSelectedCenterName] = useState<string>("Lucknow Chowk Centre");
+  const [leaderboardLevel, setLeaderboardLevel] = useState<"region" | "combined_center" | "center">("center");
   const [selectedTab, setSelectedTab] = useState<string>("diagnostic");
   const [leaderboardMetric, setLeaderboardMetric] = useState<"combined" | "subjective" | "ioqm" | "ramp_up" | "attendance" | "retention">("combined");
+  const [benchmarkRefType, setBenchmarkRefType] = useState<"overall" | "metric_wise">("overall");
+  
+  // Custom Dynamic Sidebar Filters
+  const [regionFilter, setRegionFilter] = useState<string>("All");
+  const [combinedCenterFilter, setCombinedCenterFilter] = useState<string>("All");
+  const [sidebarSortAsc, setSidebarSortAsc] = useState<boolean>(false);
   
   // Track IDs of students whose borderline grades we are simulating coaching for
   const [coachedStudentIds, setCoachedStudentIds] = useState<string[]>([]);
+  const [subjectiveSortBy, setSubjectiveSortBy] = useState<"percentage" | "name">("percentage");
   
   // Gemini AI Expert report states
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -202,8 +214,24 @@ export default function App() {
     setFetchSheetError("Google Sheet direct sync is restricted. Please download as .xlsx or .csv and drag into Step-by-Step Matrix Data Upload instead.");
   };
 
+  // Load additional admin emails from localStorage
+  const [customAdmins, setCustomAdmins] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("custom_admin_emails");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Check if current authenticated user has administrative database access
-  const isAdmin = googleUser?.email === "sharma.devansh987@gmail.com";
+  const lowercaseEmail = googleUser?.email?.toLowerCase() || "";
+  const isAdmin = 
+    lowercaseEmail === "sharma.devansh987@gmail.com" ||
+    lowercaseEmail === "gurukul.ops@pw.live" ||
+    lowercaseEmail.startsWith("sharma.devansh") ||
+    lowercaseEmail.startsWith("gurukul.ops") ||
+    customAdmins.some(email => email.toLowerCase() === lowercaseEmail);
 
   // Track if initial load from Firebase Firestore is completed
   const [isInitialLoadDone, setIsInitialLoadDone] = useState<boolean>(false);
@@ -365,8 +393,8 @@ export default function App() {
 
   // Calculate dynamic ranking of centers based on current simulation state
   const rankedCenters = useMemo(() => {
-    return getRankedCenters(simulatedStudents);
-  }, [simulatedStudents]);
+    return getRankedMetricGroups(simulatedStudents, leaderboardLevel);
+  }, [simulatedStudents, leaderboardLevel]);
 
   // Safe Empty Center Standard
   const emptyCenterScores = useMemo(() => ({
@@ -410,8 +438,8 @@ export default function App() {
 
   // Get raw baseline scores (without simulation) to compare
   const baselineCenters = useMemo(() => {
-    return getRankedCenters(students);
-  }, [students]);
+    return getRankedMetricGroups(students, leaderboardLevel);
+  }, [students, leaderboardLevel]);
 
   const selectedCenterBaseline = useMemo(() => {
     if (selectedCenterName === "All Centers Combined") {
@@ -423,9 +451,88 @@ export default function App() {
     return baselineCenters.find((c) => c.centerName === selectedCenterName) || baselineCenters[0] || emptyCenterScores;
   }, [baselineCenters, selectedCenterName, nationalBaselineMetrics, emptyCenterScores]);
 
+  // Planned Rank & Score Simulator Helper
+  const plannedMetrics = useMemo(() => {
+    const baseRank = selectedCenterBaseline.rank;
+    const simRank = selectedCenterScores.rank;
+    
+    // Core points impact
+    const baseScore = selectedCenterBaseline.consolidatedScore;
+    const simScore = selectedCenterScores.consolidatedScore;
+    const scoreDiff = simScore - baseScore;
+    
+    // Categories
+    const baseRetention = selectedCenterBaseline.studentRetentionScore;
+    const simRetention = selectedCenterScores.studentRetentionScore;
+    
+    const baseSubjective = selectedCenterBaseline.subjectiveTestScore;
+    const simSubjective = selectedCenterScores.subjectiveTestScore;
+    
+    const baseIoqm = selectedCenterBaseline.ioqmScore;
+    const simIoqm = selectedCenterScores.ioqmScore;
+    
+    const baseRampUp = selectedCenterBaseline.rampUpScore;
+    const simRampUp = selectedCenterScores.rampUpScore;
+    
+    const baseAttendance = selectedCenterBaseline.testAttendanceScore;
+    const simAttendance = selectedCenterScores.testAttendanceScore;
+    
+    return {
+      baseRank,
+      simRank,
+      baseScore,
+      simScore,
+      scoreDiff,
+      baseRetention,
+      simRetention,
+      baseSubjective,
+      simSubjective,
+      baseIoqm,
+      simIoqm,
+      baseRampUp,
+      simRampUp,
+      baseAttendance,
+      simAttendance
+    };
+  }, [selectedCenterBaseline, selectedCenterScores]);
+
+  // Filtered active students matching the currently selected entity / hierarchy level
+  const selectedCenterStudents = useMemo(() => {
+    if (selectedCenterName === "All Centers Combined") {
+      return students;
+    }
+    return students.filter(s => {
+      const { region, combined_center } = getStudentRegionAndCombinedCenter(s);
+      if (leaderboardLevel === "region") {
+        return region === selectedCenterName;
+      } else if (leaderboardLevel === "combined_center") {
+        return combined_center === selectedCenterName;
+      } else {
+        return s.center === selectedCenterName;
+      }
+    });
+  }, [students, selectedCenterName, leaderboardLevel]);
+
+  // Filtered simulated student list matching the selected entity / hierarchy level
+  const simulatedSelectedCenterStudents = useMemo(() => {
+    if (selectedCenterName === "All Centers Combined") {
+      return simulatedStudents;
+    }
+    return simulatedStudents.filter(s => {
+      const { region, combined_center } = getStudentRegionAndCombinedCenter(s);
+      if (leaderboardLevel === "region") {
+        return region === selectedCenterName;
+      } else if (leaderboardLevel === "combined_center") {
+        return combined_center === selectedCenterName;
+      } else {
+        return s.center === selectedCenterName;
+      }
+    });
+  }, [simulatedStudents, selectedCenterName, leaderboardLevel]);
+
   // --- TARGET STUDENT LIST (Lucknow specific borderline students) ---
   const currentCenterBorderlineStudents = useMemo(() => {
-    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter((s) => s.center === selectedCenterName);
+    const centerStudents = selectedCenterStudents;
     
     // Filter out double absent students
     const active = centerStudents.filter(
@@ -433,7 +540,7 @@ export default function App() {
     );
 
     // Identify students with at least 1 failing paper in the 30% to 39% range
-    return active.filter((s) => {
+    const filtered = active.filter((s) => {
       const papers: number[] = [];
       if (s.t1_attendance === "Present") {
         if (s.t1_scores.physics !== undefined) papers.push(s.t1_scores.physics);
@@ -446,11 +553,26 @@ export default function App() {
         if (s.t2_scores.maths !== undefined) papers.push(s.t2_scores.maths);
       }
       return papers.some((score) => score >= 30 && score <= 39);
-    }).slice(0, 6); // Limit to top borderline students for targeted action
-  }, [students, selectedCenterName]);
+    });
+
+    // Sort accordingly
+    const sorted = [...filtered].sort((a, b) => {
+      if (subjectiveSortBy === "percentage") {
+        const failingPaperA = getStudentPerformance(a).papers.find(p => (p.score || 0) < 40);
+        const failingPaperB = getStudentPerformance(b).papers.find(p => (p.score || 0) < 40);
+        const scoreA = failingPaperA ? failingPaperA.score : 35;
+        const scoreB = failingPaperB ? failingPaperB.score : 35;
+        return scoreA - scoreB; // Lowest passing score first
+      } else {
+        return a.name.localeCompare(b.name);
+      }
+    });
+
+    return sorted.slice(0, 15); // Expand to 15 students for better workspace interaction
+  }, [students, selectedCenterName, subjectiveSortBy]);
 
   // --- LEAK ANALYSER ---
-  // Identify the component that underperformed the most compared to perfection (or Kota Prime baseline)
+  // Identify the component that underperformed the most compared to perfection (or dynamic topper baseline)
   const rankLeakInfo = useMemo(() => {
     const baseline = selectedCenterBaseline;
     const items = [
@@ -496,30 +618,245 @@ export default function App() {
       .map((c, i) => ({ ...c, metricRank: i + 1 }));
   }, [rankedCenters]);
 
+  // --- DYNAMIC REGIONS & COMBINED CENTERS FROM STUDENTS ---
+  const allRegions = useMemo(() => {
+    const list = students.map(s => {
+      const { region } = getStudentRegionAndCombinedCenter(s);
+      return region;
+    });
+    return ["All", ...Array.from(new Set(list)).filter(Boolean).sort()];
+  }, [students]);
+
+  const allCombinedCenters = useMemo(() => {
+    const filteredStudents = students.filter(s => {
+      if (regionFilter === "All") return true;
+      const { region } = getStudentRegionAndCombinedCenter(s);
+      return region === regionFilter;
+    });
+    const list = filteredStudents.map(s => {
+      const { combined_center } = getStudentRegionAndCombinedCenter(s);
+      return combined_center;
+    });
+    return ["All", ...Array.from(new Set(list)).filter(Boolean).sort()];
+  }, [students, regionFilter]);
+
   const activeMetricList = useMemo(() => {
+    let list = [];
     switch (leaderboardMetric) {
       case "subjective":
-        return subjectiveRanked;
+        list = [...subjectiveRanked];
+        break;
       case "ioqm":
-        return ioqmRanked;
+        list = [...ioqmRanked];
+        break;
       case "ramp_up":
-        return rampUpRanked;
+        list = [...rampUpRanked];
+        break;
       case "attendance":
-        return attendanceRanked;
+        list = [...attendanceRanked];
+        break;
       case "retention":
-        return retentionRanked;
+        list = [...retentionRanked];
+        break;
       case "combined":
       default:
-        return rankedCenters.map((item, index) => ({ ...item, metricRank: index + 1 }));
+        list = rankedCenters.map((item, index) => ({ ...item, metricRank: index + 1 }));
+        break;
     }
-  }, [rankedCenters, leaderboardMetric, subjectiveRanked, ioqmRanked, rampUpRanked, attendanceRanked, retentionRanked]);
+
+    // Apply Region Filter
+    if (regionFilter !== "All") {
+      list = list.filter(c => c.region === regionFilter);
+    }
+
+    // Apply Combined Center Filter
+    if (combinedCenterFilter !== "All") {
+      list = list.filter(c => c.combined_center === combinedCenterFilter);
+    }
+
+    // Apply sorting order
+    list.sort((a, b) => {
+      let scoreA = 0;
+      let scoreB = 0;
+      if (leaderboardMetric === "combined") {
+        scoreA = a.consolidatedScore;
+        scoreB = b.consolidatedScore;
+      } else if (leaderboardMetric === "subjective") {
+        scoreA = a.subjectiveTestScore;
+        scoreB = b.subjectiveTestScore;
+      } else if (leaderboardMetric === "ioqm") {
+        scoreA = a.ioqmScore;
+        scoreB = b.ioqmScore;
+      } else if (leaderboardMetric === "ramp_up") {
+        scoreA = a.rampUpScore;
+        scoreB = b.rampUpScore;
+      } else if (leaderboardMetric === "attendance") {
+        scoreA = a.testAttendanceScore;
+        scoreB = b.testAttendanceScore;
+      } else if (leaderboardMetric === "retention") {
+        scoreA = a.studentRetentionScore;
+        scoreB = b.studentRetentionScore;
+      }
+
+      if (sidebarSortAsc) {
+        return scoreA - scoreB; // Lowest score first (ascending)
+      } else {
+        return scoreB - scoreA; // Highest score first (descending)
+      }
+    });
+
+    return list;
+  }, [rankedCenters, leaderboardMetric, subjectiveRanked, ioqmRanked, rampUpRanked, attendanceRanked, retentionRanked, regionFilter, combinedCenterFilter, sidebarSortAsc]);
+
+  // Safely auto-shift selected center if it gets filtered out of active list
+  useEffect(() => {
+    if (selectedCenterName === "All Centers Combined") return;
+    if (activeMetricList.length === 0) return;
+    const exists = activeMetricList.some(c => c.centerName === selectedCenterName);
+    if (!exists) {
+      // Find default first center or Lucknow if exists
+      const firstMat = activeMetricList[0];
+      if (firstMat) {
+        setSelectedCenterName(firstMat.centerName);
+      }
+    }
+  }, [activeMetricList, selectedCenterName]);
+
+  // --- BASELINE INDIVIDUAL METRIC RANKINGS ---
+  const subjectiveBaselineRanked = useMemo(() => {
+    return [...baselineCenters]
+      .sort((a, b) => b.subjectiveTestScore - a.subjectiveTestScore)
+      .map((c, i) => ({ ...c, metricRank: i + 1 }));
+  }, [baselineCenters]);
+
+  const ioqmBaselineRanked = useMemo(() => {
+    return [...baselineCenters]
+      .sort((a, b) => b.ioqmScore - a.ioqmScore)
+      .map((c, i) => ({ ...c, metricRank: i + 1 }));
+  }, [baselineCenters]);
+
+  const rampUpBaselineRanked = useMemo(() => {
+    return [...baselineCenters]
+      .sort((a, b) => b.rampUpScore - a.rampUpScore)
+      .map((c, i) => ({ ...c, metricRank: i + 1 }));
+  }, [baselineCenters]);
+
+  const attendanceBaselineRanked = useMemo(() => {
+    return [...baselineCenters]
+      .sort((a, b) => b.testAttendanceScore - a.testAttendanceScore)
+      .map((c, i) => ({ ...c, metricRank: i + 1 }));
+  }, [baselineCenters]);
+
+  const retentionBaselineRanked = useMemo(() => {
+    return [...baselineCenters]
+      .sort((a, b) => b.studentRetentionScore - a.studentRetentionScore)
+      .map((c, i) => ({ ...c, metricRank: i + 1 }));
+  }, [baselineCenters]);
+
+  // Friendly name for active metric on UI
+  const selectedMetricFriendlyName = useMemo(() => {
+    switch (leaderboardMetric) {
+      case "subjective": return "Subjective Test Focus";
+      case "ioqm": return "IOQM Achievement Focus";
+      case "ramp_up": return "9th/10th Ramp Up Focus";
+      case "attendance": return "Attendance Focus";
+      case "retention": return "Student Retention Focus";
+      case "combined":
+      default:
+        return "Overall Consolidated";
+    }
+  }, [leaderboardMetric]);
+
+  // Baseline Rank and Score for the selected metric
+  const selectedMetricRankBaseline = useMemo(() => {
+    if (selectedCenterName === "All Centers Combined") return 0;
+    let list;
+    switch (leaderboardMetric) {
+      case "subjective": list = subjectiveBaselineRanked; break;
+      case "ioqm": list = ioqmBaselineRanked; break;
+      case "ramp_up": list = rampUpBaselineRanked; break;
+      case "attendance": list = attendanceBaselineRanked; break;
+      case "retention": list = retentionBaselineRanked; break;
+      case "combined":
+      default:
+        return selectedCenterBaseline.rank;
+    }
+    const found = list.find(c => c.centerName === selectedCenterName);
+    return found ? found.metricRank : 0;
+  }, [leaderboardMetric, selectedCenterName, selectedCenterBaseline, subjectiveBaselineRanked, ioqmBaselineRanked, rampUpBaselineRanked, attendanceBaselineRanked, retentionBaselineRanked]);
+
+  const selectedMetricScoreBaseline = useMemo(() => {
+    switch (leaderboardMetric) {
+      case "subjective": return selectedCenterBaseline.subjectiveTestScore;
+      case "ioqm": return selectedCenterBaseline.ioqmScore;
+      case "ramp_up": return selectedCenterBaseline.rampUpScore;
+      case "attendance": return selectedCenterBaseline.testAttendanceScore;
+      case "retention": return selectedCenterBaseline.studentRetentionScore;
+      case "combined":
+      default:
+        return selectedCenterBaseline.consolidatedScore;
+    }
+  }, [leaderboardMetric, selectedCenterBaseline]);
+
+  // Simulated Rank and Score for the selected metric
+  const selectedMetricRankSimulated = useMemo(() => {
+    if (selectedCenterName === "All Centers Combined") return 0;
+    let list;
+    switch (leaderboardMetric) {
+      case "subjective": list = subjectiveRanked; break;
+      case "ioqm": list = ioqmRanked; break;
+      case "ramp_up": list = rampUpRanked; break;
+      case "attendance": list = attendanceRanked; break;
+      case "retention": list = retentionRanked; break;
+      case "combined":
+      default:
+        return selectedCenterScores.rank;
+    }
+    const found = list.find(c => c.centerName === selectedCenterName);
+    return found ? found.metricRank : 0;
+  }, [leaderboardMetric, selectedCenterName, selectedCenterScores, subjectiveRanked, ioqmRanked, rampUpRanked, attendanceRanked, retentionRanked]);
+
+  const selectedMetricScoreSimulated = useMemo(() => {
+    switch (leaderboardMetric) {
+      case "subjective": return selectedCenterScores.subjectiveTestScore;
+      case "ioqm": return selectedCenterScores.ioqmScore;
+      case "ramp_up": return selectedCenterScores.rampUpScore;
+      case "attendance": return selectedCenterScores.testAttendanceScore;
+      case "retention": return selectedCenterScores.studentRetentionScore;
+      case "combined":
+      default:
+        return selectedCenterScores.consolidatedScore;
+    }
+  }, [leaderboardMetric, selectedCenterScores]);
 
   // --- NATIONAL CENTER LEADERBOARD SORTING ENGINE ---
   const [centerSortField, setCenterSortField] = useState<string>("rank");
   const [centerSortAsc, setCenterSortAsc] = useState<boolean>(true);
 
   const sortedRankedCenters = useMemo(() => {
-    return [...rankedCenters].sort((a, b) => {
+    let list = [...rankedCenters];
+
+    // Apply Region Filter to table rows (if we are checking drill down level 'combined_center' or 'center')
+    if (leaderboardLevel !== "region" && regionFilter !== "All") {
+      list = list.filter(c => c.region === regionFilter);
+    }
+
+    // Apply Combined Center Filter to table rows (if we are checking drill down level 'center')
+    if (leaderboardLevel === "center" && combinedCenterFilter !== "All") {
+      list = list.filter(c => c.combined_center === combinedCenterFilter);
+    }
+
+    // Assign group standing local rank (computed over the score descending)
+    const sortedByScore = [...list].sort((a, b) => b.consolidatedScore - a.consolidatedScore);
+    const listWithLocalRanks = list.map(item => {
+      const gIndex = sortedByScore.findIndex(x => x.centerName === item.centerName);
+      return {
+        ...item,
+        localRank: gIndex !== -1 ? gIndex + 1 : 1
+      };
+    });
+
+    return listWithLocalRanks.sort((a, b) => {
       let valA: any;
       let valB: any;
       if (centerSortField === "rank") {
@@ -528,6 +865,12 @@ export default function App() {
       } else if (centerSortField === "centerName") {
         valA = a.centerName;
         valB = b.centerName;
+      } else if (centerSortField === "region") {
+        valA = a.region || "Uttar Pradesh";
+        valB = b.region || "Uttar Pradesh";
+      } else if (centerSortField === "combined_center") {
+        valA = a.combined_center || "Lucknow Combined";
+        valB = b.combined_center || "Lucknow Combined";
       } else if (centerSortField === "consolidatedScore") {
         valA = a.consolidatedScore;
         valB = b.consolidatedScore;
@@ -555,14 +898,14 @@ export default function App() {
       }
       return centerSortAsc ? valA - valB : valB - valA;
     });
-  }, [rankedCenters, centerSortField, centerSortAsc]);
+  }, [rankedCenters, leaderboardLevel, regionFilter, combinedCenterFilter, centerSortField, centerSortAsc]);
 
   // --- LOCAL EVALUATION STUDENT POOL SORTING ENGINE ---
   const [studentSortField, setStudentSortField] = useState<string>("name");
   const [studentSortAsc, setStudentSortAsc] = useState<boolean>(true);
 
   const sortedSelectedCenterStudents = useMemo(() => {
-    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter(s => s.center === selectedCenterName);
+    const centerStudents = selectedCenterStudents;
     return [...centerStudents].sort((a, b) => {
       let valA: any;
       let valB: any;
@@ -599,11 +942,11 @@ export default function App() {
       }
       return studentSortAsc ? valA - valB : valB - valA;
     });
-  }, [students, selectedCenterName, studentSortField, studentSortAsc]);
+  }, [selectedCenterStudents, studentSortField, studentSortAsc]);
 
   // Priority Action Items for the Selected Center and Metric Focus
   const actionablePlan = useMemo(() => {
-    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter((s) => s.center === selectedCenterName);
+    const centerStudents = selectedCenterStudents;
     const activeStudents = centerStudents.filter(
       (s) => s.t1_attendance === "Present" || s.t2_attendance === "Present"
     );
@@ -706,10 +1049,24 @@ export default function App() {
     const getRetentionItems = () => {
       return centerStudents
         .filter((s) => !s.retained)
-        .map((s) => ({
-          student: s,
-          action: "Dropped out/Not retained in ledger. Call parents, resolve active academic or fee query.",
-        }));
+        .map((s) => {
+          const isDefaulter = s.defaulter_status?.toLowerCase().includes("defaulter") && !s.defaulter_status?.toLowerCase().includes("not");
+          const isInactive = s.inactive !== undefined && s.inactive !== "" && s.inactive !== "no" && !s.inactive.toLowerCase().includes("not");
+          
+          let subType = "Inactive Student";
+          let actionLabel = "Fulfill academic contact: Schedule parent counseling to change Inactive status to Active.";
+          
+          if (isDefaulter) {
+            subType = "Fee Defaulter Student";
+            actionLabel = "Fulfill fee collection: Contact parents to resolve late payment of 2nd EMI of fees.";
+          }
+          
+          return {
+            student: s,
+            subType,
+            action: actionLabel
+          };
+        });
     };
 
     return {
@@ -720,7 +1077,7 @@ export default function App() {
       rampUpItems: getRampUpItems(),
       retentionItems: getRetentionItems(),
     };
-  }, [students, selectedCenterName, coachedStudentIds]);
+  }, [selectedCenterStudents, coachedStudentIds]);
 
   // --- CLIENT-SIDE PAGINATOR & SEARCH ENGINE FOR LARGE LIST RENDERING PERFORMANCE ---
   const filteredAndSortedPoolStudents = useMemo(() => {
@@ -827,7 +1184,7 @@ export default function App() {
 
   const handleApplyPresetTier2 = () => {
     // Coach ALL students with any failing papers in the center to 45%
-    const centerStudents = selectedCenterName === "All Centers Combined" ? students : students.filter((s) => s.center === selectedCenterName);
+    const centerStudents = selectedCenterStudents;
     const activeWithFailures = centerStudents.filter((s) => {
       const perf = getStudentPerformance(s);
       return perf.isActive && perf.failingPapersCount > 0;
@@ -1262,35 +1619,178 @@ export default function App() {
   };
 
   // --- RECHARTS CHART DATA PREPARATION ---
+  // Find Overall Topper at active leaderboard level (rank 1)
+  const overallTopper = useMemo(() => {
+    return rankedCenters.length > 0 ? rankedCenters[0] : null;
+  }, [rankedCenters]);
+
+  const benchmarkLabel = useMemo(() => {
+    if (benchmarkRefType === "overall") {
+      const topperName = overallTopper ? overallTopper.centerName : "Overall Topper";
+      return `${topperName} (Overall Topper)`;
+    } else {
+      return "Metric Topper (Max Achieved)";
+    }
+  }, [benchmarkRefType, overallTopper]);
+
   const chartData = useMemo(() => {
+    const refSubjective = benchmarkRefType === "overall" 
+      ? (overallTopper ? Math.round(overallTopper.subjectiveTestScore) : 100)
+      : (rankedCenters.length > 0 ? Math.round(Math.max(...rankedCenters.map(c => c.subjectiveTestScore))) : 100);
+
+    const refIoqm = benchmarkRefType === "overall"
+      ? (overallTopper ? Math.round(overallTopper.ioqmScore) : 97)
+      : (rankedCenters.length > 0 ? Math.round(Math.max(...rankedCenters.map(c => c.ioqmScore))) : 100);
+
+    const refRampUp = benchmarkRefType === "overall"
+      ? (overallTopper ? Math.round(overallTopper.rampUpScore) : 100)
+      : (rankedCenters.length > 0 ? Math.round(Math.max(...rankedCenters.map(c => c.rampUpScore))) : 100);
+
+    const refAttendance = benchmarkRefType === "overall"
+      ? (overallTopper ? Math.round(overallTopper.testAttendanceScore) : 100)
+      : (rankedCenters.length > 0 ? Math.round(Math.max(...rankedCenters.map(c => c.testAttendanceScore))) : 100);
+
+    const refRetention = benchmarkRefType === "overall"
+      ? (overallTopper ? Math.round(overallTopper.studentRetentionScore) : 100)
+      : (rankedCenters.length > 0 ? Math.round(Math.max(...rankedCenters.map(c => c.studentRetentionScore))) : 100);
+
     return [
       {
         metric: "Subjective T. (25%)",
         "Current Center": Math.round(selectedCenterScores.subjectiveTestScore),
-        "Kota Prime (Ref)": 100,
+        "Benchmark (Ref)": refSubjective,
       },
       {
         metric: "IOQM (20%)",
         "Current Center": Math.round(selectedCenterScores.ioqmScore),
-        "Kota Prime (Ref)": 97,
+        "Benchmark (Ref)": refIoqm,
       },
       {
         metric: "Ramp Up (15%)",
         "Current Center": Math.round(selectedCenterScores.rampUpScore),
-        "Kota Prime (Ref)": 100,
+        "Benchmark (Ref)": refRampUp,
       },
       {
         metric: "Attendance (10%)",
         "Current Center": Math.round(selectedCenterScores.testAttendanceScore),
-        "Kota Prime (Ref)": 100,
+        "Benchmark (Ref)": refAttendance,
       },
       {
         metric: "Retention (30%)",
         "Current Center": Math.round(selectedCenterScores.studentRetentionScore),
-        "Kota Prime (Ref)": 100,
+        "Benchmark (Ref)": refRetention,
       },
     ];
-  }, [selectedCenterScores]);
+  }, [selectedCenterScores, benchmarkRefType, overallTopper, rankedCenters]);
+
+  // Render Dynamic Improvement & Rank Impact Simulator Banner
+  const renderSimulatorImpactPanel = (metricTab: "retention" | "subjective" | "ioqm" | "ramp_up" | "attendance") => {
+    const tabLabel = 
+      metricTab === "retention" ? "Retention (30% Weight)" :
+      metricTab === "subjective" ? "Subjective (25% Weight)" :
+      metricTab === "ioqm" ? "IOQM (20% Weight)" :
+      metricTab === "ramp_up" ? "Ramp Up (15% Weight)" :
+      "Attendance (10% Weight)";
+
+    const tabLabelNoWeight = 
+      metricTab === "retention" ? "Retention" :
+      metricTab === "subjective" ? "Subjective Plan" :
+      metricTab === "ioqm" ? "IOQM" :
+      metricTab === "ramp_up" ? "Ramp Up" :
+      "Attendance";
+
+    const baseMetricVal = 
+      metricTab === "retention" ? plannedMetrics.baseRetention :
+      metricTab === "subjective" ? plannedMetrics.baseSubjective :
+      metricTab === "ioqm" ? plannedMetrics.baseIoqm :
+      metricTab === "ramp_up" ? plannedMetrics.baseRampUp :
+      plannedMetrics.baseAttendance;
+
+    const simMetricVal = 
+      metricTab === "retention" ? plannedMetrics.simRetention :
+      metricTab === "subjective" ? plannedMetrics.simSubjective :
+      metricTab === "ioqm" ? plannedMetrics.simIoqm :
+      metricTab === "ramp_up" ? plannedMetrics.simRampUp :
+      plannedMetrics.simAttendance;
+
+    const metricColor = 
+      metricTab === "retention" ? "text-orange-400" :
+      metricTab === "subjective" ? "text-cyan-400" :
+      metricTab === "ioqm" ? "text-cyan-400" :
+      metricTab === "ramp_up" ? "text-purple-400" :
+      "text-emerald-400";
+
+    return (
+      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 border-slate-800 space-y-3.5 my-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-805 border-slate-800 pb-2.5">
+          <div>
+            <h4 className="text-xs font-bold font-mono text-slate-150 text-slate-100 flex items-center gap-1.5 uppercase tracking-wider">
+              <Sparkles className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+              ⚙️ Corrective Action & Planned Rank Improvement Predictor
+            </h4>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Predicting the real-time impact of supporting at-risk student cohorts on the overall national standing.
+            </p>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-[10px] text-slate-500 font-mono font-bold block uppercase">Drill Level</span>
+            <span className="text-xs font-mono font-bold text-yellow-400 capitalize">{leaderboardLevel.replace("_", " ")}</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+          <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-805 border-slate-800">
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono block">Overall Score</span>
+            <div className="flex items-center justify-center gap-1.5 mt-1">
+              <span className="text-[11px] font-mono text-slate-400 line-through">{plannedMetrics.baseScore.toFixed(1)}</span>
+              <span className="text-slate-500 text-xs">→</span>
+              <span className="text-sm font-mono font-bold text-slate-100">{plannedMetrics.simScore.toFixed(1)}</span>
+            </div>
+            <span className="text-[10px] text-emerald-400 font-bold block mt-1">
+              {plannedMetrics.scoreDiff > 0 ? `+${plannedMetrics.scoreDiff.toFixed(1)} Points` : "0.0 Change"}
+            </span>
+          </div>
+
+          <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-805 border-slate-800">
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono block">Metric Name</span>
+            <div className="flex items-center justify-center gap-1.5 mt-1">
+              <span className="text-[11px] font-mono text-slate-400 line-through">{baseMetricVal.toFixed(1)}</span>
+              <span className="text-slate-500 text-xs">→</span>
+              <span className="text-sm font-mono font-bold text-slate-100">{simMetricVal.toFixed(1)}</span>
+            </div>
+            <span className={`text-[10px] font-bold block mt-1 ${metricColor}`}>
+              {tabLabelNoWeight}
+            </span>
+          </div>
+
+          <div className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-805 border-slate-800">
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono block">Predicted Rank</span>
+            <div className="flex items-center justify-center gap-1.5 mt-1">
+              <span className="text-[11px] font-mono text-slate-400 line-through">Rank #{plannedMetrics.baseRank || 1}</span>
+              <span className="text-slate-500 text-xs">→</span>
+              <span className="text-sm font-mono font-bold text-emerald-400">Rank #{plannedMetrics.simRank || 1}</span>
+            </div>
+            <span className="text-[10px] text-slate-500 font-bold block mt-1 flex items-center justify-center gap-1">
+              {plannedMetrics.baseRank - plannedMetrics.simRank > 0 ? (
+                <>
+                  <TrendingUp className="w-3 h-3 text-emerald-400 shrink-0" />
+                  <span className="text-emerald-400">+{plannedMetrics.baseRank - plannedMetrics.simRank} Rank Jump</span>
+                </>
+              ) : (
+                "Same Rank"
+              )}
+            </span>
+          </div>
+
+          <div className="bg-slate-900/50 p-2 rounded-lg border border-slate-850 border-slate-800 flex flex-col justify-center">
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono block">Predicted Students</span>
+            <span className="text-xs font-mono font-bold text-indigo-400 mt-1">{coachedStudentIds.length} Total</span>
+            <span className="text-[9px] text-slate-500 font-mono block mt-0.5">Toggle student card checkmarks below</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans" id="teacher-analytics-app">
@@ -1372,6 +1872,10 @@ export default function App() {
             isAdmin={isAdmin}
             googleUser={googleUser}
             handleGoogleLogin={handleGoogleLogin}
+            authError={authError}
+            setAuthError={setAuthError}
+            customAdmins={customAdmins}
+            setCustomAdmins={setCustomAdmins}
           />
         </section>
 
@@ -1957,6 +2461,448 @@ export default function App() {
         </section>
         )}
 
+        {/* SECTION B: CORE NATIONAL COMPREHENSIVE RANK CHECKS COMPARATOR TABLE (Start with this 2nd Screen shot, full width) */}
+        <section className="lg:col-span-12" id="national-rank-section">
+          {/* SECTION B: CORE NATIONAL COMPREHENSIVE RANK CHECKS COMPARATOR TABLE */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-lg font-bold font-display text-slate-50 flex items-center gap-2">
+                  <Award className="w-5 h-5 text-yellow-500 shrink-0" />
+                  🥇 Comprehensive National Leaderboard (Region, Combined Center, Center Hub Drill-down)
+                </h3>
+                <p className="text-xs text-slate-400">Review other standing criteria scores in a unified admin spreadsheet index grid. Click headers to sort.</p>
+              </div>
+              <button
+                onClick={handleExportLeaderboardCSV}
+                className="bg-emerald-600 hover:bg-emerald-500 text-slate-50 font-semibold text-xs py-2 px-3.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer active:scale-98 shadow-md shrink-0"
+                title="Export the national leaderboard data directly to a CSV spreadsheet"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export Leaderboard (.csv)</span>
+              </button>
+            </div>
+
+            {/* Dynamic Hierarchy Selector for Drill-Down Check */}
+            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider shrink-0">
+                  🎯 View Drill Level:
+                </span>
+                <div className="flex items-center gap-1.5 bg-slate-900 p-1.5 rounded-lg border border-slate-800 font-sans">
+                  <button
+                    onClick={() => {
+                      setLeaderboardLevel("region");
+                      setSelectedCenterName("Uttar Pradesh");
+                    }}
+                    className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                      leaderboardLevel === "region"
+                        ? "bg-emerald-600 text-slate-50 shadow-md"
+                        : "text-slate-400 hover:text-slate-100 hover:bg-slate-850"
+                    }`}
+                  >
+                    🌍 Region Ranks
+                  </button>
+                  <button
+                    onClick={() => {
+                      setLeaderboardLevel("combined_center");
+                      setSelectedCenterName("Lucknow Combined");
+                    }}
+                    className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                      leaderboardLevel === "combined_center"
+                        ? "bg-cyan-600 text-slate-50 shadow-md"
+                        : "text-slate-400 hover:text-slate-100 hover:bg-slate-850"
+                    }`}
+                  >
+                    🏢 Combined Center
+                  </button>
+                  <button
+                    onClick={() => {
+                      setLeaderboardLevel("center");
+                      setSelectedCenterName("Lucknow Chowk Centre");
+                    }}
+                    className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                      leaderboardLevel === "center"
+                        ? "bg-yellow-500 text-slate-950 shadow-md font-extrabold"
+                        : "text-slate-400 hover:text-slate-100 hover:bg-slate-850"
+                    }`}
+                  >
+                    📍 Center Hub
+                  </button>
+                </div>
+              </div>
+              <div className="text-xs text-slate-400 bg-slate-900 border border-slate-800 py-1.5 px-3 rounded-lg shrink-0 font-medium font-mono">
+                Showing <strong className="text-slate-200 capitalize">{leaderboardLevel.replace("_", " ")}</strong> stats individually.
+              </div>
+            </div>
+
+            {/* Highly interactive, easy-to-use search and quick filters toolbar in the front */}
+            <div className="bg-slate-950/65 p-3.5 rounded-xl border border-slate-800/80 mb-4 space-y-3">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-850 pb-2">
+                <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-300 uppercase tracking-wide">
+                  <Sliders className="w-3.5 h-3.5 text-yellow-500 text-yellow-405" />
+                  <span>📋 Quick Leaderboard Standing Filters</span>
+                </div>
+                {(regionFilter !== "All" || combinedCenterFilter !== "All" || sidebarSortAsc) && (
+                  <button
+                    onClick={() => {
+                      setRegionFilter("All");
+                      setCombinedCenterFilter("All");
+                      setSidebarSortAsc(false);
+                    }}
+                    className="text-[11px] text-yellow-405 text-yellow-400 hover:text-yellow-300 font-mono font-bold underline transition cursor-pointer flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-2.5 h-2.5 animate-spin-slow" />
+                    Reset Filter Criteria
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {/* Region Dropdown Filter */}
+                <div>
+                  <label className="text-[10px] text-slate-450 text-slate-400 block font-mono font-semibold mb-1 uppercase tracking-wider">
+                    🌍 Filter Region:
+                  </label>
+                  <select
+                    value={regionFilter}
+                    onChange={(e) => {
+                      setRegionFilter(e.target.value);
+                      setCombinedCenterFilter("All");
+                    }}
+                    className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg p-2 focus:outline-none focus:border-yellow-500/85 transition"
+                  >
+                    {allRegions.map((reg) => (
+                      <option key={reg} value={reg}>
+                        {reg === "All" ? "🌍 National (All Regions)" : reg}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Combined Center Dropdown Filter */}
+                <div>
+                  <label className="text-[10px] text-slate-455 text-slate-400 block font-mono font-semibold mb-1 uppercase tracking-wider">
+                    🏢 Filter Combined Center:
+                  </label>
+                  <select
+                    value={combinedCenterFilter}
+                    disabled={regionFilter === "All"}
+                    onChange={(e) => setCombinedCenterFilter(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg p-2 focus:outline-none focus:border-yellow-500/85 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {allCombinedCenters.map((cc) => (
+                      <option key={cc} value={cc}>
+                        {cc === "All" ? "🏢 All Combined Centers" : cc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Sort Direction Toggle control right in the front! */}
+                <div className="flex flex-col justify-end">
+                  <span className="text-[10px] text-slate-460 text-slate-400 block font-mono font-semibold mb-1 uppercase tracking-wider">
+                    🔄 Leaderboard Sort Mode:
+                  </span>
+                  <button
+                    onClick={() => setSidebarSortAsc(!sidebarSortAsc)}
+                    className="w-full flex items-center justify-between bg-slate-900 border border-slate-800 text-xs font-mono font-bold text-slate-250 text-slate-200 hover:text-yellow-405 hover:border-yellow-500/30 p-2 rounded-lg transition cursor-pointer"
+                    title="Toggle Sorting Direction to find low performance units quickly"
+                  >
+                    <span className="text-[11px]">Ascending order?</span>
+                    {sidebarSortAsc ? (
+                      <span className="text-rose-450 text-rose-400 flex items-center gap-1 font-bold">
+                        Low to High <ArrowUpNarrowWide className="w-3.5 text-rose-400" />
+                      </span>
+                    ) : (
+                      <span className="text-emerald-450 text-emerald-400 flex items-center gap-1 font-bold">
+                        High to Low <ArrowDownWideNarrow className="w-3.5 text-emerald-400" />
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-[10.5px] text-slate-500 font-mono pt-1">
+                <span>
+                  Found <strong className="text-slate-205 text-slate-300 font-bold">{sortedRankedCenters.length}</strong> matching entries out of <strong className="text-slate-205 text-slate-300 font-bold">{rankedCenters.length}</strong> total in Drill level.
+                </span>
+                {regionFilter !== "All" && (
+                  <span className="text-yellow-500 font-bold">
+                    📍 Sub-Group Rank Active
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-800 rounded-lg">
+                <table className="w-full text-left text-xs bg-slate-950 font-sans">
+                  <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800 text-[10px] uppercase select-none">
+                    <tr>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "rank") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("rank");
+                            setCenterSortAsc(true);
+                          }
+                        }}
+                        className="p-3 cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap"
+                      >
+                        Rank {centerSortField === "rank" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "centerName") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("centerName");
+                            setCenterSortAsc(true);
+                          }
+                        }}
+                        className="p-3 text-left cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap text-yellow-400 font-bold"
+                      >
+                        {leaderboardLevel === "region" ? "🌍 Region" : leaderboardLevel === "combined_center" ? "🏢 Combined Center" : "📍 Center Hub"} {centerSortField === "centerName" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      {leaderboardLevel !== "region" && (
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "region") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("region");
+                              setCenterSortAsc(true);
+                            }
+                          }}
+                          className="p-3 text-left cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap text-emerald-400"
+                        >
+                          Region {centerSortField === "region" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                      )}
+                      {leaderboardLevel === "center" && (
+                        <th 
+                          onClick={() => {
+                            if (centerSortField === "combined_center") {
+                              setCenterSortAsc(!centerSortAsc);
+                            } else {
+                              setCenterSortField("combined_center");
+                              setCenterSortAsc(true);
+                            }
+                          }}
+                          className="p-3 text-left cursor-pointer hover:bg-slate-800 hover:text-slate-105 transition whitespace-nowrap text-cyan-400"
+                        >
+                          Combined Center {centerSortField === "combined_center" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                        </th>
+                      )}
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "consolidatedScore") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("consolidatedScore");
+                            setCenterSortAsc(false);
+                          }
+                        }}
+                        className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-105 transition text-yellow-400 font-bold bg-yellow-500/5 whitespace-nowrap"
+                      >
+                        Overall Score {centerSortField === "consolidatedScore" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "subjective") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("subjective");
+                            setCenterSortAsc(false);
+                          }
+                        }}
+                        className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-105 transition text-cyan-400 whitespace-nowrap"
+                      >
+                        Subjective (25%) {centerSortField === "subjective" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "ioqm") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("ioqm");
+                            setCenterSortAsc(false);
+                          }
+                        }}
+                        className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-105 transition text-yellow-550 font-medium whitespace-nowrap"
+                      >
+                        IOQM (20%) {centerSortField === "ioqm" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "rampUp") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("rampUp");
+                            setCenterSortAsc(false);
+                          }
+                        }}
+                        className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-105 transition text-purple-405 whitespace-nowrap"
+                      >
+                        Ramp Up (15%) {centerSortField === "rampUp" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "attendance") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("attendance");
+                            setCenterSortAsc(false);
+                          }
+                        }}
+                        className="p-2.5 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-105 transition text-emerald-400 whitespace-nowrap"
+                      >
+                        Attn (10%) {centerSortField === "attendance" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                      <th 
+                        onClick={() => {
+                          if (centerSortField === "retention") {
+                            setCenterSortAsc(!centerSortAsc);
+                          } else {
+                            setCenterSortField("retention");
+                            setCenterSortAsc(false);
+                          }
+                        }}
+                        className="p-2.5 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-150 transition text-orange-400 whitespace-nowrap"
+                      >
+                        Retn (30%) {centerSortField === "retention" ? (centerSortAsc ? "▲" : "▼") : "↕"}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-850">
+                    {/* Special National Combined Row */}
+                    <tr 
+                      onClick={() => setSelectedCenterName("All Centers Combined")}
+                      className={`transition-colors cursor-pointer hover:bg-slate-850/40 text-[11px] ${
+                        selectedCenterName === "All Centers Combined" ? "bg-cyan-950/40 border-y border-cyan-500/50" : ""
+                      }`}
+                    >
+                      <td className="p-3 font-mono font-extrabold text-slate-50 border-r border-slate-800/40">
+                        <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400">
+                          NAT
+                        </span>
+                      </td>
+                      <td className="p-3 font-semibold text-slate-200">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={selectedCenterName === "All Centers Combined" ? "text-cyan-400 font-bold" : "text-slate-300"}>
+                            👑 All Centers Combined (National)
+                          </span>
+                          {selectedCenterName === "All Centers Combined" && (
+                            <span className="bg-cyan-500 text-slate-950 font-mono font-bold text-[8px] px-1.5 py-0.2 rounded shrink-0 uppercase">Active</span>
+                          )}
+                        </div>
+                      </td>
+                      {leaderboardLevel !== "region" && (
+                        <td className="p-3 text-left font-semibold text-emerald-400 font-mono">
+                          All Regions
+                        </td>
+                      )}
+                      {leaderboardLevel === "center" && (
+                        <td className="p-3 text-left font-semibold text-cyan-400">
+                          All Combined
+                        </td>
+                      )}
+                      <td className="p-3 font-mono font-bold text-center bg-cyan-500/10 text-cyan-400 text-xs shadow-inner">
+                        {nationalCombinedMetrics.consolidatedScore.toFixed(1)}
+                      </td>
+                      <td className="p-3 font-mono text-center text-slate-300">
+                        {nationalCombinedMetrics.subjectiveTestScore.toFixed(1)}
+                      </td>
+                      <td className="p-3 font-mono text-center text-slate-300">
+                        {nationalCombinedMetrics.ioqmScore.toFixed(1)}
+                      </td>
+                      <td className="p-3 font-mono text-center text-slate-300">
+                        {nationalCombinedMetrics.rampUpScore.toFixed(1)}
+                      </td>
+                      <td className="p-2.5 font-mono text-center text-slate-300">
+                        {nationalCombinedMetrics.testAttendanceScore.toFixed(1)}
+                      </td>
+                      <td className="p-2.5 font-mono text-center text-slate-300">
+                        {nationalCombinedMetrics.studentRetentionScore.toFixed(1)}
+                      </td>
+                    </tr>
+
+                    {sortedRankedCenters.map((item) => {
+                      const isSelectedCenter = item.centerName === selectedCenterName;
+                      return (
+                        <tr 
+                          key={item.centerName} 
+                          onClick={() => setSelectedCenterName(item.centerName)}
+                          className={`transition-colors cursor-pointer hover:bg-slate-850/40 text-[11px] ${
+                            isSelectedCenter ? "bg-slate-800/70 border-y-2 border-yellow-500/50 animate-pulse" : ""
+                          }`}
+                        >
+                          <td className="p-3 font-mono font-extrabold text-slate-50 border-r border-slate-800/40">
+                            {regionFilter !== "All" || combinedCenterFilter !== "All" ? (
+                              <div className="flex flex-col items-start gap-1">
+                                <span className="px-1 py-0.5 rounded text-[8px] font-mono leading-none bg-slate-900 border border-slate-800 text-slate-400" title="National Rank">
+                                  NAT #{item.rank}
+                                </span>
+                                <span className="px-1 py-0.5 rounded text-[9.5px] font-mono leading-none bg-yellow-500/20 text-yellow-405 font-bold border border-yellow-500/35" title="Local Rank inside active Filter">
+                                  LOCAL #{item.localRank}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className={`px-2 py-0.5 rounded ${
+                                item.rank === 1 ? "bg-yellow-500/20 text-yellow-405" :
+                                item.rank === 2 ? "bg-slate-350/25 text-slate-300" :
+                                item.rank === 3 ? "bg-amber-700/25 text-amber-500" : "text-slate-400"
+                              }`}>
+                                #{item.rank}
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 font-semibold text-slate-300">
+                            <div className="flex items-center gap-1.5">
+                              <span className={isSelectedCenter ? "text-yellow-450 text-yellow-405 font-bold" : "text-slate-300"}>
+                                {item.centerName}
+                              </span>
+                              {isSelectedCenter && <span className="bg-yellow-400 text-slate-950 font-mono font-bold text-[8px] px-1.5 py-0.2 rounded shrink-0 uppercase">Active</span>}
+                            </div>
+                          </td>
+                          {leaderboardLevel !== "region" && (
+                            <td className="p-3 text-left font-semibold text-emerald-400 font-mono">
+                              {item.region || "Uttar Pradesh"}
+                            </td>
+                          )}
+                          {leaderboardLevel === "center" && (
+                            <td className="p-3 text-left font-semibold text-cyan-400">
+                              {item.combined_center || "Lucknow Combined"}
+                            </td>
+                          )}
+                          <td className="p-3 font-mono font-bold text-center bg-yellow-500/10 text-yellow-405 text-xs shadow-inner">
+                            {item.consolidatedScore.toFixed(1)}
+                          </td>
+                          <td className="p-3 font-mono text-center text-slate-350">
+                            {item.subjectiveTestScore.toFixed(1)}
+                          </td>
+                          <td className="p-3 font-mono text-center text-slate-350">
+                            {item.ioqmScore.toFixed(1)}
+                          </td>
+                          <td className="p-3 font-mono text-center text-slate-350">
+                            {item.rampUpScore.toFixed(1)}
+                          </td>
+                          <td className="p-2.5 font-mono text-center text-slate-350">
+                            {item.testAttendanceScore.toFixed(1)}
+                          </td>
+                          <td className="p-2.5 font-mono text-center text-slate-350">
+                            {item.studentRetentionScore.toFixed(1)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+          </div>
+        </section>
+
         {/* 2. LEFT PANEL: ALL CENTERS LEADERBOARD PROGRESS */}
         <section className="lg:col-span-4 space-y-4" id="leaderboard-section">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
@@ -1973,6 +2919,87 @@ export default function App() {
               <span className="text-[9px] text-slate-450 text-slate-400 bg-slate-950 px-2 py-1 rounded font-mono uppercase font-bold text-center">
                 Live Tables
               </span>
+            </div>
+
+            {/* DRILL DOWN & FILTER BY REGION/COMBINED CENTER */}
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800/80 mb-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold font-mono text-slate-400 uppercase tracking-wider block">
+                  🛠️ Filter & Drill Down Standing
+                </span>
+                {(regionFilter !== "All" || combinedCenterFilter !== "All" || sidebarSortAsc) && (
+                  <button
+                    onClick={() => {
+                      setRegionFilter("All");
+                      setCombinedCenterFilter("All");
+                      setSidebarSortAsc(false);
+                    }}
+                    className="text-[9.5px] text-yellow-500 hover:text-yellow-400 font-mono font-bold underline transition cursor-pointer"
+                  >
+                    Reset filters
+                  </button>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[9px] text-slate-400 block font-mono font-semibold mb-1">Region</label>
+                  <select
+                    value={regionFilter}
+                    onChange={(e) => {
+                      setRegionFilter(e.target.value);
+                      setCombinedCenterFilter("All");
+                    }}
+                    className="w-full bg-slate-900 border border-slate-800 text-[11px] text-slate-200 rounded p-1.5 focus:outline-none focus:border-yellow-500/80 transition"
+                  >
+                    {allRegions.map((reg) => (
+                      <option key={reg} value={reg}>
+                        {reg === "All" ? "🌍 All Regions" : reg}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[9px] text-slate-400 block font-mono font-semibold mb-1">Combined Center</label>
+                  <select
+                    value={combinedCenterFilter}
+                    disabled={regionFilter === "All"}
+                    onChange={(e) => setCombinedCenterFilter(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 text-[11px] text-slate-200 rounded p-1.5 focus:outline-none focus:border-yellow-500/80 transition disabled:opacity-50 disabled:cursor-not-allowed text-slate-300"
+                  >
+                    {allCombinedCenters.map((cc) => (
+                      <option key={cc} value={cc}>
+                        {cc === "All" ? "🏢 All Combined" : cc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Sidebar sorting toggle control for the leaderboard */}
+              <div className="flex justify-between items-center pt-2 border-t border-slate-900 text-[10px]">
+                <span className="text-slate-400 font-mono">
+                  Matching: <strong className="text-slate-100 font-bold">{activeMetricList.length}</strong>
+                </span>
+
+                <button
+                  onClick={() => setSidebarSortAsc(!sidebarSortAsc)}
+                  id="toggle-sort-direction-btn"
+                  className="flex items-center gap-1 bg-slate-900 border border-slate-800 text-[9.5px] font-mono font-bold text-slate-300 hover:text-yellow-400 transition hover:border-yellow-500/30 px-2 py-1 rounded cursor-pointer"
+                  title="Toggle Sorting Direction to find low performance units quickly"
+                >
+                  <span>Sort Order:</span>
+                  {sidebarSortAsc ? (
+                    <span className="text-rose-400 flex items-center gap-1 font-bold">
+                      Low to High <ArrowUpNarrowWide className="w-3" />
+                    </span>
+                  ) : (
+                    <span className="text-emerald-400 flex items-center gap-1 font-bold">
+                      High to Low <ArrowDownWideNarrow className="w-3" />
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* MULTI-METRIC INDIVIDUAL TABLES TABS */}
@@ -2099,7 +3126,7 @@ export default function App() {
                           👑 All Centers Combined
                         </h3>
                         <div className="flex items-center gap-1.5 text-[9.5px] text-slate-400 mt-0.5 font-sans">
-                          <span>National Pool: {students.length} students</span>
+                          <span>Total Unique Registrations: {new Set(students.map(s => s.id)).size} students</span>
                         </div>
                       </div>
                     </div>
@@ -2191,7 +3218,7 @@ export default function App() {
                           {center.centerName}
                         </h3>
                         <div className="flex items-center gap-1.5 text-[9.5px] text-slate-400 mt-0.5 font-sans">
-                          <span className="truncate">Pool: {center.activeStudents} active</span>
+                          <span className="truncate">Student Count: {center.activeStudents} active</span>
                           {/* Rank Shift Indicator */}
                           {overallRankShift > 0 && (
                             <span className="text-emerald-400 font-mono font-bold flex items-center text-[9px]">
@@ -2252,7 +3279,7 @@ export default function App() {
                   {selectedCenterScores.centerName}
                 </h2>
                 <p className="text-sm text-slate-400 mt-1">
-                  Reviewing academic leaks and simulated What-If targets.
+                  Reviewing academic leaks and predicted What-If targets.
                 </p>
               </div>
 
@@ -2278,19 +3305,19 @@ export default function App() {
               </div>
             </div>
 
-            {/* Simulated Shift Notification Banner */}
+            {/* Predicted Shift Notification Banner */}
             {coachedStudentIds.length > 0 && (
               <div className="mt-4 bg-sky-500/10 border border-sky-400/30 text-sky-300 p-2.5 rounded-lg flex items-center justify-between text-xs font-mono">
                 <span className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-sky-400 animate-pulse" />
-                  What-If Simulation Active: Coaching <strong>{coachedStudentIds.length}</strong> student papers.
+                  What-If Prediction Active: Coaching <strong>{coachedStudentIds.length}</strong> student papers.
                 </span>
                 <button
                   onClick={handleResetSimulation}
                   className="bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 px-3 py-1 rounded transition-colors text-xs flex items-center gap-1"
                 >
                   <RefreshCw className="w-3 h-3" />
-                  Reset Simulation
+                  Reset Prediction
                 </button>
               </div>
             )}
@@ -2364,7 +3391,7 @@ export default function App() {
                         Configure Headers & Coordinates
                       </strong>
                       <p className="text-[11px] mt-0.5 leading-relaxed text-slate-400">
-                        Make sure your local spreadsheet has correct header columns matching: <code>id</code> (unique roll number), <code>name</code>, <code>center</code> (e.g. <code>Kota Prime</code>), and <code>grade</code> (e.g. <code>9</code>, <code>10</code>, <code>11</code>, <code>12</code>).
+                        Make sure your local spreadsheet has correct header columns matching: <code>id</code> (unique roll number), <code>name</code>, <code>center</code> (e.g. <code>Lucknow Combined</code>), and <code>grade</code> (e.g. <code>9</code>, <code>10</code>, <code>11</code>, <code>12</code>).
                       </p>
                     </div>
                     <div>
@@ -2373,7 +3400,7 @@ export default function App() {
                         Drag & Drop or Select Format
                       </strong>
                       <p className="text-[11px] mt-0.5 leading-relaxed text-slate-400">
-                        Select corresponding matrix format from uploader format dropdown (Format 1-5 or Master Format) and drag your files. The system consolidates, evaluates rules, re-ranks regional centers and enables target remedial simulation instantly on your screen.
+                        Select corresponding matrix format from uploader format dropdown (Format 1-5 or Master Format) and drag your files. The system consolidates, evaluates rules, re-ranks regional centers and enables target remedial prediction instantly on your screen.
                       </p>
                     </div>
                   </div>
@@ -2401,7 +3428,7 @@ export default function App() {
                     {selectedCenterName === "Lucknow Chowk Centre" ? (
                       <span> Lucknow center teachers must focus heavily on coaching borderline students scoring in the 30-39% range to dramatically boost our Subjective Test indexes, which currently act as a core performance bottleneck.</span>
                     ) : (
-                      <span> Targeted remediation is urgently required on this metric to match top-performing hubs like Kota Prime.</span>
+                      <span> Targeted remediation is urgently required on this metric to match top-performing hubs like {overallTopper ? overallTopper.centerName : "the overall topper"}.</span>
                     )}
                   </p>
                 </div>
@@ -2497,9 +3524,36 @@ export default function App() {
 
               {/* BAR CHART GRAPH COMPARING METRICS */}
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-                <h3 className="font-display font-semibold text-slate-100 text-sm mb-4">
-                  📊 Metrics Breakdown compared to Kota Prime Center (Rank #1 Benchmark)
-                </h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                  <h3 className="font-display font-semibold text-slate-100 text-sm">
+                    📊 Metrics Breakdown compared to <span className="text-yellow-400 font-extrabold">{benchmarkLabel}</span>
+                  </h3>
+                  
+                  <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
+                    <button
+                      onClick={() => setBenchmarkRefType("overall")}
+                      className={`px-3 py-1 rounded-md text-[11px] font-bold font-mono transition-colors cursor-pointer ${
+                        benchmarkRefType === "overall"
+                          ? "bg-yellow-500 text-slate-950"
+                          : "text-slate-400 hover:text-slate-100"
+                      }`}
+                      title="Compare with the overall #1 ranked center at current drill-down level"
+                    >
+                      🥇 Overall Topper
+                    </button>
+                    <button
+                      onClick={() => setBenchmarkRefType("metric_wise")}
+                      className={`px-3 py-1 rounded-md text-[11px] font-bold font-mono transition-colors cursor-pointer ${
+                        benchmarkRefType === "metric_wise"
+                          ? "bg-yellow-500 text-slate-950"
+                          : "text-slate-400 hover:text-slate-100"
+                      }`}
+                      title="Compare with the maximum possible score achieved for each metric individually"
+                    >
+                      🎯 Metric Topper
+                    </button>
+                  </div>
+                </div>
                 
                 <div className="w-full h-80">
                   <ResponsiveContainer width="100%" height="100%">
@@ -2515,7 +3569,7 @@ export default function App() {
                       />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       <Bar dataKey="Current Center" fill="#eab308" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="Kota Prime (Ref)" fill="#475569" radius={[4, 4, 0, 0]} opacity={0.6} />
+                      <Bar dataKey="Benchmark (Ref)" name={benchmarkLabel} fill="#475569" radius={[4, 4, 0, 0]} opacity={0.6} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -2580,6 +3634,8 @@ export default function App() {
                   📝 Academic Breakdown: {selectedCenterScores.centerName} (Subjective Test Focus)
                 </h2>
 
+                {renderSimulatorImpactPanel("subjective")}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Element A Toppers Card */}
                   <div className="p-4 bg-slate-950 rounded-lg border border-slate-800/80">
@@ -2636,7 +3692,7 @@ export default function App() {
                 <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-3.5" id="what-all-presets">
                   <h3 className="font-display font-semibold text-slate-200 text-xs uppercase tracking-wider flex items-center gap-1.5">
                     <Sliders className="w-4 h-4 text-cyan-400" />
-                    🔮 Interactive What-If Simulator Presets
+                    🔮 Interactive What-If Predictor Presets
                   </h3>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
@@ -2670,12 +3726,37 @@ export default function App() {
 
                 {/* BOARDERLINE CHECKBOX CONTROLLERS SECTION */}
                 <div className="space-y-3">
-                  <h3 className="text-xs uppercase font-bold tracking-wider text-slate-400">
-                    📋 Student Coaching Selection
-                  </h3>
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                    <h3 className="text-xs uppercase font-bold tracking-wider text-slate-400">
+                      📋 Student Coaching Selection (Predicted Results Pool)
+                    </h3>
+                    <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 text-[11px]">
+                      <span className="text-slate-500 font-mono px-1.5 font-bold">Sort Students:</span>
+                      <button
+                        onClick={() => setSubjectiveSortBy("percentage")}
+                        className={`px-2 py-1 rounded cursor-pointer font-bold ${
+                          subjectiveSortBy === "percentage"
+                            ? "bg-slate-850 text-cyan-400"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        Lowest Fail Score %
+                      </button>
+                      <button
+                        onClick={() => setSubjectiveSortBy("name")}
+                        className={`px-2 py-1 rounded cursor-pointer font-bold ${
+                          subjectiveSortBy === "name"
+                            ? "bg-slate-850 text-cyan-400"
+                            : "text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        Name A-Z
+                      </button>
+                    </div>
+                  </div>
                   
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Check the boxes below to simulate coaching individual students. Daily score averages will update instantly!
+                    Check the boxes below to predict school/student performance under active coaching. Daily score averages will update instantly!
                   </p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
@@ -2719,7 +3800,7 @@ export default function App() {
                               </span>
                               <span className="text-slate-600">|</span>
                               <span className="text-cyan-450 font-medium text-[10px] text-cyan-400">
-                                Simulated Pass: 45% (Needs +{gap}%)
+                                Predicted Pass: 45% (Needs +{gap}%)
                               </span>
                             </div>
                           </div>
@@ -2729,43 +3810,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* PASSING MATRIX GAP DATA TABLE */}
-                <div className="pt-4 border-t border-slate-800">
-                  <h3 className="font-semibold text-slate-300 text-sm mb-3">
-                    📋 Teacher Priority Intervention Table (Next Time Action Plan)
-                  </h3>
 
-                  <div className="overflow-x-auto border border-slate-800 rounded-lg">
-                    <table className="w-full text-left text-xs bg-slate-950 font-sans">
-                      <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800">
-                        <tr>
-                          <th className="p-3">Student Name</th>
-                          <th className="p-3">Registration Number</th>
-                          <th className="p-3">Current Fail Score</th>
-                          <th className="p-3">Gap to Pass Matrix Line</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800">
-                        {currentCenterBorderlineStudents.map((s, idx) => {
-                          const failingPaper = getStudentPerformance(s).papers.find(p => (p.score || 0) < 40);
-                          const currentScoreStr = failingPaper ? `${failingPaper.name}: ${failingPaper.score}%` : "Maths: 35%";
-                          const scoreGap = failingPaper ? (40 - (failingPaper.score || 0)) : 5;
-
-                          return (
-                            <tr key={s.id} className="hover:bg-slate-900/40">
-                              <td className="p-3 font-semibold text-slate-200">{s.name}</td>
-                              <td className="p-3 text-slate-400 font-mono">{s.id}</td>
-                              <td className="p-3 text-rose-400 font-mono font-bold">{currentScoreStr}</td>
-                              <td className="p-3 text-cyan-400 font-medium">
-                                Needs just <strong className="font-mono text-cyan-300">+{scoreGap}%</strong> to clear pass matrix line
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
               </div>
 
               {/* DYNAMIC WHAT-IF SIMULATOR PRESET EXPLAINER DIALOGUE CARD */}
@@ -2775,19 +3820,51 @@ export default function App() {
                   What-If Recalculation Insight (National Position Shift)
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  By checking the borderline boxes above (Tier 1 preset), Lucknow's subjective failure footprint shrinks from <strong className="text-rose-400">13.3%</strong> to <strong className="text-emerald-400">6.7%</strong>. This causes our Element B index to jump from <strong className="text-slate-400">16.7</strong> points to <strong className="text-yellow-400">83.3</strong> points, pushing Lucknow's Consolidated Score up!
+                  By checking the borderline boxes above (Tier 1 preset), <strong className="text-yellow-400">{selectedCenterName}</strong>'s subjective failure footprint shrinks from <strong className="text-rose-400">{selectedCenterBaseline.elementB_percent?.toFixed(1) || "0.0"}%</strong> to <strong className="text-emerald-400">{selectedCenterScores.elementB_percent?.toFixed(1) || "0.0"}%</strong>. This causes the Element B (Fail Rate) index to jump to <strong className="text-yellow-400">{selectedCenterScores.elementB_score?.toFixed(1) || "0.0"}</strong> points, pushing the Consolidated Score up!
                 </p>
                 
                 <div className="grid grid-cols-2 gap-4 bg-slate-950 p-4 rounded-lg border border-slate-800 text-slate-300">
-                  <div>
-                    <span className="text-[10px] text-slate-500 block uppercase tracking-wider">Before Simulation Rank</span>
-                    <strong className="text-sm font-mono text-rose-400 font-bold block">Rank #5 (61.2 / 100)</strong>
+                  <div className="space-y-4">
+                    <div>
+                      <span className="text-[10px] text-slate-500 block uppercase tracking-wider font-semibold mb-1">Before Prediction Ranks</span>
+                      <div className="space-y-2">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-mono">Overall Consolidated</span>
+                          <strong className="text-sm font-mono text-rose-400 font-bold block">
+                            {selectedCenterBaseline.rank > 0 ? `Rank #${selectedCenterBaseline.rank}` : "N/A"} ({selectedCenterBaseline.consolidatedScore.toFixed(1)} / 100)
+                          </strong>
+                        </div>
+                        {leaderboardMetric !== "combined" && (
+                          <div className="border-t border-slate-900 pt-1.5">
+                            <span className="text-[10px] text-slate-400 block font-mono">{selectedMetricFriendlyName}</span>
+                            <strong className="text-xs font-mono text-rose-300 font-medium block">
+                              Rank #{selectedMetricRankBaseline > 0 ? selectedMetricRankBaseline : "N/A"} ({selectedMetricScoreBaseline.toFixed(1)} / 100)
+                            </strong>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 block uppercase tracking-wider">Simulated Rank Potential</span>
-                    <strong className="text-sm font-mono text-emerald-400 font-bold block">
-                      Rank #{selectedCenterScores.rank} ({selectedCenterScores.consolidatedScore.toFixed(1)} / 100)
-                    </strong>
+                  <div className="space-y-4">
+                    <div>
+                      <span className="text-[10px] text-slate-500 block uppercase tracking-wider font-semibold mb-1">Predicted Rank Potential</span>
+                      <div className="space-y-2">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-mono">Overall Consolidated</span>
+                          <strong className="text-sm font-mono text-emerald-400 font-bold block">
+                            {selectedCenterScores.rank > 0 ? `Rank #${selectedCenterScores.rank}` : "N/A"} ({selectedCenterScores.consolidatedScore.toFixed(1)} / 100)
+                          </strong>
+                        </div>
+                        {leaderboardMetric !== "combined" && (
+                          <div className="border-t border-slate-900 pt-1.5">
+                            <span className="text-[10px] text-slate-400 block font-mono">{selectedMetricFriendlyName}</span>
+                            <strong className="text-xs font-mono text-emerald-300 font-medium block">
+                              Rank #{selectedMetricRankSimulated > 0 ? selectedMetricRankSimulated : "N/A"} ({selectedMetricScoreSimulated.toFixed(1)} / 100)
+                            </strong>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -2822,8 +3899,10 @@ export default function App() {
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
-                  The IOQM metric scales linearly based on average scores of active, non-absent students. Giving concept-checksheets and custom practices to the following at-risk students boosts their simulated marks to <strong className="text-cyan-400 font-mono">90%</strong> (maximizing centers overall indices).
+                  The IOQM metric scales linearly based on average scores of active, non-absent students. Giving concept-checksheets and custom practices to the following at-risk students boosts their predicted marks to <strong className="text-cyan-400 font-mono">90%</strong> (maximizing centers overall indices).
                 </p>
+
+                {renderSimulatorImpactPanel("ioqm")}
 
                 {/* PAGINATION & SEARCH FOR IOQM */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
@@ -2876,7 +3955,7 @@ export default function App() {
                               </div>
                               <div className="text-[11px] text-slate-400 mt-1">
                                 Current Score: <span className="text-rose-400 font-bold font-mono">{currentScore}%</span>
-                                <br />Simulated Increase: <span className="text-emerald-400 font-bold font-mono">90% (+{90 - currentScore}%)</span>
+                                <br />Predicted Increase: <span className="text-emerald-400 font-bold font-mono">90% (+{90 - currentScore}%)</span>
                               </div>
                             </div>
                           </button>
@@ -2898,7 +3977,7 @@ export default function App() {
                           <th className="p-3">Student Name</th>
                           <th className="p-3">Reference ID</th>
                           <th className="p-3">Actual IOQM Score</th>
-                          <th className="p-3">Simulated Target Point Shift</th>
+                          <th className="p-3">Predicted Target Point Shift</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-850 text-slate-300 divide-slate-850">
@@ -2910,7 +3989,7 @@ export default function App() {
                               <td className="p-3 text-slate-400 font-mono">{student.id}</td>
                               <td className="p-3 text-rose-500 font-mono font-semibold">{currentScore}%</td>
                               <td className="p-3 text-emerald-400 font-medium">
-                                {isCoached ? "Simulated: +30% boost active" : "Target coaching: boost to 90%"}
+                                {isCoached ? "Predicted: +30% boost active" : "Target coaching: boost to 90%"}
                               </td>
                             </tr>
                           );
@@ -2970,8 +4049,11 @@ export default function App() {
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
-                  The Ramp Up topper index is calculated from the proportion of Class 9 & 10 pupils who secure <strong className="text-purple-400 font-mono">&gt;= 80% marks</strong>. Giving active remedial reviews clears the 80% marks ceiling (boosted to 85% in simulation).
+                  The Ramp Up topper index is calculated from the proportion of Class 9 & 10 pupils who secure <strong className="text-purple-405 text-purple-400 font-mono">&gt;= 80% marks</strong>. Giving active remedial reviews clears the 80% marks ceiling (boosted to 85% in prediction).
                 </p>
+
+                {renderSimulatorImpactPanel("ramp_up")}
+
                 {/* PAGINATION & SEARCH FOR RAMP UP */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
                   <div className="relative flex-1 max-w-sm">
@@ -3023,7 +4105,7 @@ export default function App() {
                               </div>
                               <div className="text-[11px] text-slate-400 mt-1">
                                 Current Score: <span className="text-rose-455 text-rose-400 font-bold font-mono">{currentScore}%</span>
-                                <br />Simulated Topper: <span className="text-purple-400 font-bold font-mono">85% (Cleared target!)</span>
+                                <br />Predicted Topper: <span className="text-purple-400 font-bold font-mono">85% (Cleared target!)</span>
                               </div>
                             </div>
                           </button>
@@ -3114,8 +4196,10 @@ export default function App() {
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
-                  The attendance rate is computed by active student attendance. Giving absent parents phone coaching or offline support schedules restores simulated papers (converts "Absent" to "Present" with dynamic pass average).
+                  The attendance rate is computed by active student attendance. Giving absent parents phone coaching or offline support schedules restores predicted papers (converts "Absent" to "Present" with dynamic pass average).
                 </p>
+
+                {renderSimulatorImpactPanel("attendance")}
 
                 {/* PAGINATION & SEARCH FOR ATTENDANCE */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
@@ -3145,35 +4229,65 @@ export default function App() {
                   {filteredAbsenteeItems.length === 0 ? (
                     <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="attendance-checklist-elements">
-                      {paginatedAbsenteeItems.map(({ student, type }) => {
-                        const isCoached = coachedStudentIds.includes(student.id);
-                        return (
-                          <button
-                            key={`${student.id}-${type}`}
-                            onClick={() => handleToggleCoach(student.id)}
-                            className={`flex items-start text-left p-3.5 rounded-lg border transition-all duration-155 cursor-pointer ${
-                              isCoached
-                                ? "bg-slate-800/60 border-cyan-500/60 shadow-md"
-                                : "bg-slate-950 border-slate-800 hover:border-slate-705 cursor-pointer"
-                            }`}
-                          >
-                            <div className="mr-3 text-cyan-400 mt-0.5">
-                              {isCoached ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-600 hover:text-slate-500" />}
-                            </div>
-                            <div className="flex-1">
-                              <div className="flex justify-between items-center text-xs">
-                                <span className="font-semibold text-slate-100">{student.name}</span>
-                                <span className="text-[10px] font-mono text-slate-500 font-bold">{student.id}</span>
+                    <div>
+                      {/* INTEGRATED ATTENDANCE PREDICTION ENGINE METRIC ACCENT */}
+                      <div className="mb-4 bg-slate-950 p-4 border border-emerald-500/20 rounded-xl space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-mono font-bold tracking-widest uppercase px-2 py-0.5 rounded">
+                              ⚙️ Attendance Prediction Engine
+                            </span>
+                            <p className="text-[11px] text-slate-350 mt-1 leading-normal max-w-xl">
+                              Students with missed tests are marked with <strong className="text-rose-400">Absent</strong> entries. Predicting parent counseling converts these absences into <strong className="text-emerald-400">Present (1)</strong> status (using subject-specific counts with max 4 subjects per test), boosting center performance.
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right bg-slate-900 border border-slate-800 px-3 py-1 rounded">
+                            <span className="text-[8px] text-slate-500 block font-mono font-bold uppercase">Impact</span>
+                            <span className="text-xs font-mono font-bold text-emerald-400 font-bold">
+                              Rank #{selectedCenterScores.rank} / Score: {selectedCenterScores.testAttendanceScore.toFixed(1)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="attendance-checklist-elements">
+                        {paginatedAbsenteeItems.map(({ student, type }) => {
+                          const isCoached = coachedStudentIds.includes(student.id);
+                          return (
+                            <button
+                              key={`${student.id}-${type}`}
+                              onClick={() => handleToggleCoach(student.id)}
+                              className={`flex items-start text-left p-3.5 rounded-lg border transition-all duration-155 cursor-pointer ${
+                                isCoached
+                                  ? "bg-slate-850 border-emerald-500/60 shadow-md shadow-emerald-500/5"
+                                  : "bg-slate-950 border-slate-800 hover:border-slate-705"
+                              }`}
+                            >
+                              <div className="mr-3 text-emerald-400 mt-0.5">
+                                {isCoached ? (
+                                  <span className="bg-emerald-500 text-slate-900 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-extrabold">✓</span>
+                                ) : (
+                                  <span className="border-2 border-slate-600 hover:border-emerald-500 rounded-full w-5 h-5 block" />
+                                )}
                               </div>
-                              <div className="text-[11px] text-slate-400 mt-1 font-sans">
-                                Attendance Code: <span className="text-rose-400 font-bold">{type}</span>
-                                <br />Remediation Action: <span className="text-emerald-400 font-bold">Reschedule Makeup Test</span>
+                              <div className="flex-1">
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className={`font-semibold ${isCoached ? "text-emerald-400 font-bold" : "text-slate-100"}`}>{student.name}</span>
+                                  <span className="text-[10px] font-mono text-slate-500 font-bold">{student.id}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 mt-1 font-sans">
+                                  Current Attendance Code: <span className="text-rose-400 font-bold">{type}</span>
+                                  <br />{isCoached ? (
+                                    <span className="text-emerald-400 font-bold">✓ Predicted Present (Counted as 1)</span>
+                                  ) : (
+                                    <>Remediation Action: <span className="text-emerald-450 font-bold text-emerald-400">Reschedule Makeup Test</span></>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          </button>
-                        );
-                      })}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3202,7 +4316,7 @@ export default function App() {
                               <td className="p-3 text-slate-400 font-mono">{student.id}</td>
                               <td className="p-3 text-rose-400 font-mono font-bold">{type}</td>
                               <td className="p-3 text-emerald-400 font-medium">
-                                {isCoached ? "Simulated makeup active: Restored to present" : "Schedule parent phone outreach"}
+                                {isCoached ? "Predicted makeup active: Restored to present" : "Schedule parent phone outreach"}
                               </td>
                             </tr>
                           );
@@ -3262,8 +4376,10 @@ export default function App() {
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
-                  Retention represents our core user-connection metric, constituting the largest category weight of <strong className="text-orange-400 font-mono">30%</strong> of the consolidated leaderboard. Solving individual fee queries or academic queries flips warning status directly to active (retains simulated value to present).
+                  Retention represents our core user-connection metric, constituting the largest category weight of <strong className="text-orange-400 font-mono">30%</strong> of the consolidated leaderboard. Solving individual fee queries or academic queries flips warning status directly to active (retains predicted value to present).
                 </p>
+
+                {renderSimulatorImpactPanel("retention")}
 
                 {/* PAGINATION & SEARCH FOR RETENTION */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
@@ -3293,35 +4409,85 @@ export default function App() {
                   {filteredRetentionItems.length === 0 ? (
                     <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="retention-checklist-elements">
-                      {paginatedRetentionItems.map(({ student, action }) => {
-                        const isCoached = coachedStudentIds.includes(student.id);
-                        return (
+                    <div>
+                      {/* INTEGRATED RETENTION PREDICTION ENGINE METRIC ACCENT */}
+                      <div className="mb-4 bg-slate-950 p-4 border border-orange-500/20 rounded-xl space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <span className="text-[10px] bg-orange-500/10 text-orange-400 font-mono font-bold tracking-widest uppercase px-2 py-0.5 rounded">
+                              ⚙️ Retention Prediction Engine
+                            </span>
+                            <p className="text-[11px] text-slate-300 mt-1 leading-normal max-w-xl">
+                              Students labeled as <strong className="text-rose-400">Inactive Students</strong> (academic/cancellation request alerts) or <strong className="text-amber-400">Fee Defaulters</strong> (2nd EMI payment alerts) can be predicted to paid/active. This boosts your center's consolidated rating index and overall national rank in real-time.
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right bg-slate-900 border border-slate-800 px-3 py-1 rounded">
+                            <span className="text-[8px] text-slate-500 block font-mono font-bold uppercase">Real-Time Impact</span>
+                            <span className="text-xs font-mono font-bold text-orange-400">
+                              Rank #{selectedCenterScores.rank} / Score: {selectedCenterScores.studentRetentionScore.toFixed(1)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 text-[10px]">
                           <button
-                            key={student.id}
-                            onClick={() => handleToggleCoach(student.id)}
-                            className={`flex items-start text-left p-3.5 rounded-lg border transition-all duration-155 cursor-pointer ${
-                              isCoached
-                                ? "bg-slate-800/60 border-cyan-500/60 shadow-md"
-                                : "bg-slate-950 border-slate-800 hover:border-slate-705 cursor-pointer"
-                            }`}
+                            onClick={() => {
+                              const targetIds = filteredRetentionItems.map(item => item.student.id);
+                              setCoachedStudentIds(Array.from(new Set([...coachedStudentIds, ...targetIds])));
+                            }}
+                            className="bg-orange-600 hover:bg-orange-500 text-slate-50 font-semibold py-1 px-2.5 rounded cursor-pointer"
                           >
-                            <div className="mr-3 text-cyan-400 mt-0.5">
-                              {isCoached ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-600 hover:text-slate-500" />}
-                            </div>
-                            <div className="flex-1">
-                              <div className="flex justify-between items-center text-xs">
-                                <span className="font-semibold text-slate-100">{student.name}</span>
-                                <span className="text-[10px] font-mono text-slate-400 font-semibold">{student.id}</span>
-                              </div>
-                              <div className="text-[11px] text-slate-400 mt-1 leading-normal font-sans">
-                                Current Ledger Status: <span className="text-rose-400 font-bold font-mono">Dropped Out</span>
-                                <br />Support Action: <span className="text-emerald-400 font-bold">{action}</span>
-                              </div>
-                            </div>
+                            Predict ALL Resolved (+ Rank Increase)
                           </button>
-                        );
-                      })}
+                          <button
+                            onClick={() => {
+                              const targetIds = filteredRetentionItems.map(item => item.student.id);
+                              setCoachedStudentIds(coachedStudentIds.filter(id => !targetIds.includes(id)));
+                            }}
+                            className="bg-slate-850 hover:bg-slate-800 text-slate-350 border border-slate-750 font-semibold py-1 px-2.5 rounded cursor-pointer"
+                          >
+                            Reset Prediction Box
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="retention-checklist-elements">
+                        {paginatedRetentionItems.map(({ student, subType, action }) => {
+                          const isCoached = coachedStudentIds.includes(student.id);
+                          return (
+                            <button
+                              key={student.id}
+                              onClick={() => handleToggleCoach(student.id)}
+                              className={`flex items-start text-left p-3.5 rounded-lg border transition-all duration-155 cursor-pointer ${
+                                isCoached
+                                  ? "bg-slate-850 border-orange-500/70 shadow-md shadow-orange-500/5"
+                                  : "bg-slate-950 border-slate-800 hover:border-slate-705"
+                              }`}
+                            >
+                              <div className="mr-3 mt-0.5 text-orange-400">
+                                {isCoached ? (
+                                  <span className="bg-orange-500 text-slate-950 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-extrabold">✓</span>
+                                ) : (
+                                  <span className="border-2 border-slate-600 hover:border-orange-500 rounded-full w-5 h-5 block" />
+                                )}
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className={`font-semibold ${isCoached ? "text-orange-400 font-bold" : "text-slate-100"}`}>{student.name}</span>
+                                  <span className="text-[10px] font-mono text-slate-400 font-semibold">{student.id}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 mt-1 leading-normal font-sans">
+                                  Category Label: <span className={`font-bold font-mono ${subType === "Fee Defaulter Student" ? "text-amber-400" : "text-rose-400"}`}>{subType}</span>
+                                  <br />{isCoached ? (
+                                    <span className="text-emerald-400 font-semibold">✓ Resolved (Predicted Active & Paid)</span>
+                                  ) : (
+                                    <>Support Action: <span className="text-slate-300 font-bold">{action}</span></>
+                                  )}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3338,7 +4504,7 @@ export default function App() {
                           <th className="p-3">Student Name</th>
                           <th className="p-3">Reference ID</th>
                           <th className="p-3">Outflow Status</th>
-                          <th className="p-3">Simulated Retention Rate Shift</th>
+                          <th className="p-3">Predicted Retention Rate Shift</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-850 text-slate-300">
@@ -3350,7 +4516,7 @@ export default function App() {
                               <td className="p-3 text-slate-400 font-mono">{student.id}</td>
                               <td className="p-3 text-rose-400 font-mono font-bold">Unretained</td>
                               <td className="p-3 text-emerald-400 font-medium font-sans">
-                                {isCoached ? "Simulated: Retained" : "Outreach counseling needed"}
+                                {isCoached ? "Predicted: Retained" : "Outreach counseling needed"}
                               </td>
                             </tr>
                           );
@@ -3983,376 +5149,10 @@ export default function App() {
                 </div>
 
               </div>
-
-              {/* SECTION B: CORE NATIONAL COMPREHENSIVE RANK CHECKS COMPARATOR TABLE */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                  <div>
-                    <h3 className="text-lg font-bold font-display text-slate-50 flex items-center gap-2">
-                      <Award className="w-5 h-5 text-yellow-500 shrink-0" />
-                      🥇 Comprehensive National Center Leaderboard Check (All Ranks Side-by-Side)
-                    </h3>
-                    <p className="text-xs text-slate-400">Review other center standing criteria scores in a unified admin spreadsheet index grid. Click headers to sort.</p>
-                  </div>
-                  <button
-                    onClick={handleExportLeaderboardCSV}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-slate-50 font-semibold text-xs py-2 px-3.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer active:scale-98 shadow-md shrink-0"
-                    title="Export the national leaderboard data directly to a CSV spreadsheet"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Leaderboard (.csv)</span>
-                  </button>
-                </div>
-
-                <div className="overflow-x-auto border border-slate-800 rounded-lg">
-                  <table className="w-full text-left text-xs bg-slate-950 font-sans">
-                    <thead className="bg-slate-900 text-slate-400 font-mono border-b border-slate-800 text-[10px] uppercase select-none">
-                      <tr>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "rank") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("rank");
-                              setCenterSortAsc(true);
-                            }
-                          }}
-                          className="p-3 cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap"
-                        >
-                          Rank {centerSortField === "rank" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "centerName") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("centerName");
-                              setCenterSortAsc(true);
-                            }
-                          }}
-                          className="p-3 text-left cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition whitespace-nowrap"
-                        >
-                          Center Hub {centerSortField === "centerName" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "consolidatedScore") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("consolidatedScore");
-                              setCenterSortAsc(false);
-                            }
-                          }}
-                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-yellow-400 font-bold bg-yellow-500/5 whitespace-nowrap"
-                        >
-                          Overall Score {centerSortField === "consolidatedScore" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "subjective") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("subjective");
-                              setCenterSortAsc(false);
-                            }
-                          }}
-                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-cyan-400 whitespace-nowrap"
-                        >
-                          Subjective (25%) {centerSortField === "subjective" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "ioqm") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("ioqm");
-                              setCenterSortAsc(false);
-                            }
-                          }}
-                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-yellow-500 font-medium whitespace-nowrap"
-                        >
-                          IOQM (20%) {centerSortField === "ioqm" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "rampUp") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("rampUp");
-                              setCenterSortAsc(false);
-                            }
-                          }}
-                          className="p-3 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-purple-400 whitespace-nowrap"
-                        >
-                          Ramp Up (15%) {centerSortField === "rampUp" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "attendance") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("attendance");
-                              setCenterSortAsc(false);
-                            }
-                          }}
-                          className="p-2.5 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-emerald-400 whitespace-nowrap"
-                        >
-                          Attn (10%) {centerSortField === "attendance" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                        <th 
-                          onClick={() => {
-                            if (centerSortField === "retention") {
-                              setCenterSortAsc(!centerSortAsc);
-                            } else {
-                              setCenterSortField("retention");
-                              setCenterSortAsc(false);
-                            }
-                          }}
-                          className="p-2.5 text-center cursor-pointer hover:bg-slate-800 hover:text-slate-100 transition text-orange-400 whitespace-nowrap"
-                        >
-                          Retn (30%) {centerSortField === "retention" ? (centerSortAsc ? "▲" : "▼") : "↕"}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-850">
-                      {/* Special National Combined Row */}
-                      <tr 
-                        onClick={() => setSelectedCenterName("All Centers Combined")}
-                        className={`transition-colors cursor-pointer hover:bg-slate-850/40 text-[11px] ${
-                          selectedCenterName === "All Centers Combined" ? "bg-cyan-950/40 border-y border-cyan-500/50" : ""
-                        }`}
-                      >
-                        <td className="p-3 font-mono font-extrabold text-slate-50 border-r border-slate-800/40">
-                          <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400">
-                            NAT
-                          </span>
-                        </td>
-                        <td className="p-3 font-semibold text-slate-200">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className={selectedCenterName === "All Centers Combined" ? "text-cyan-400 font-bold" : "text-slate-300"}>
-                              👑 All Centers Combined (National)
-                            </span>
-                            {selectedCenterName === "All Centers Combined" && (
-                              <span className="bg-cyan-500 text-slate-950 font-mono font-bold text-[8px] px-1.5 py-0.2 rounded shrink-0 uppercase">Active</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="p-3 font-mono font-bold text-center bg-cyan-500/10 text-cyan-400 text-xs shadow-inner">
-                          {nationalCombinedMetrics.consolidatedScore.toFixed(1)}
-                        </td>
-                        <td className="p-3 font-mono text-center text-slate-300">
-                          {nationalCombinedMetrics.subjectiveTestScore.toFixed(1)}
-                        </td>
-                        <td className="p-3 font-mono text-center text-slate-300">
-                          {nationalCombinedMetrics.ioqmScore.toFixed(1)}
-                        </td>
-                        <td className="p-3 font-mono text-center text-slate-300">
-                          {nationalCombinedMetrics.rampUpScore.toFixed(1)}
-                        </td>
-                        <td className="p-2.5 font-mono text-center text-slate-300">
-                          {nationalCombinedMetrics.testAttendanceScore.toFixed(1)}
-                        </td>
-                        <td className="p-2.5 font-mono text-center text-slate-300">
-                          {nationalCombinedMetrics.studentRetentionScore.toFixed(1)}
-                        </td>
-                      </tr>
-
-                      {sortedRankedCenters.map((item) => {
-                        const isSelectedCenter = item.centerName === selectedCenterName;
-                        return (
-                          <tr 
-                            key={item.centerName} 
-                            onClick={() => setSelectedCenterName(item.centerName)}
-                            className={`transition-colors cursor-pointer hover:bg-slate-850/40 text-[11px] ${
-                              isSelectedCenter ? "bg-slate-800/70 border-y-2 border-yellow-500/50 animate-pulse" : ""
-                            }`}
-                          >
-                            <td className="p-3 font-mono font-extrabold text-slate-50 border-r border-slate-800/40">
-                              <span className={`px-2 py-0.5 rounded ${
-                                item.rank === 1 ? "bg-yellow-500/20 text-yellow-400" :
-                                item.rank === 2 ? "bg-slate-350/25 text-slate-300" :
-                                item.rank === 3 ? "bg-amber-700/25 text-amber-500" : "text-slate-400"
-                              }`}>
-                                #{item.rank}
-                              </span>
-                            </td>
-                            <td className="p-3 font-semibold text-slate-200">
-                              <div className="flex items-center gap-1.5">
-                                <span className={isSelectedCenter ? "text-yellow-450 text-yellow-400 font-bold" : "text-slate-300"}>
-                                  {item.centerName}
-                                </span>
-                                {isSelectedCenter && <span className="bg-yellow-400 text-slate-950 font-mono font-bold text-[8px] px-1.5 py-0.2 rounded shrink-0 uppercase">Active</span>}
-                              </div>
-                            </td>
-                            <td className="p-3 font-mono font-bold text-center bg-yellow-500/10 text-yellow-400 text-xs shadow-inner">
-                              {item.consolidatedScore.toFixed(1)}
-                            </td>
-                            <td className="p-3 font-mono text-center text-slate-300">
-                              {item.subjectiveTestScore.toFixed(1)}
-                            </td>
-                            <td className="p-3 font-mono text-center text-slate-300">
-                              {item.ioqmScore.toFixed(1)}
-                            </td>
-                            <td className="p-3 font-mono text-center text-slate-300">
-                              {item.rampUpScore.toFixed(1)}
-                            </td>
-                            <td className="p-2.5 font-mono text-center text-slate-300">
-                              {item.testAttendanceScore.toFixed(1)}
-                            </td>
-                            <td className="p-2.5 font-mono text-center text-slate-300">
-                              {item.studentRetentionScore.toFixed(1)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* SECTION C: BULK DIRECT INTERVENTIONS - PERFORMANCE IMPROVEMENT SCOPE */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-lg space-y-4">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
-                  <div>
-                    <h3 className="text-lg font-bold font-display text-slate-50 flex items-center gap-2">
-                      <Sparkles className="text-cyan-400 w-5 h-5 shrink-0" />
-                      🛠️ Teacher-Lead Improvement Scope Bulk Intervention Triggers
-                    </h3>
-                    <p className="text-xs text-slate-400">Apply simulated bulk remedial actions directly to active pupil groups in {selectedCenterScores.centerName} and check the instant recalculation results.</p>
-                  </div>
-                  {coachedStudentIds.length > 0 && (
-                    <button
-                      onClick={handleResetSimulation}
-                      className="bg-rose-500/10 hover:bg-rose-500/25 text-rose-455 text-rose-400 border border-rose-500/25 px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1 active:scale-98 transition shadow cursor-pointer whitespace-nowrap"
-                    >
-                      🗑️ Clean Simulation
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  
-                  {/* Lever 1: Prevent Students Failing */}
-                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 1: PREVENT STUDENTS FAILING</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.subjectiveFailings.length} papers failing</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Conduct extra doubt-clearing classes for students who scored under 40%. This raises their scores to passing marks (45%).
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleBulkToggleFailing}
-                      disabled={actionablePlan.subjectiveFailings.length === 0}
-                      className="w-full text-center bg-cyan-900/30 hover:bg-cyan-800/40 text-cyan-205 py-1.5 rounded font-mono font-bold text-[10px] transition border border-cyan-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                    >
-                      ⚡ Simulate Doubt Classes
-                    </button>
-                  </div>
-
-                  {/* Lever 2: Encourage Borderline Toppers */}
-                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-yellow-450 text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded uppercase">LEVER 2: COOPERATE BORDERLINE TOPPERS</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.subjectiveTopperPotentials.length} candidates found</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Provide special advanced sheets to borderline students (80-89%). This helps them reach 90%+ and increases the toppers ratio!
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleBulkToggleNearToppers}
-                      disabled={actionablePlan.subjectiveTopperPotentials.length === 0}
-                      className="w-full text-center bg-yellow-950/30 hover:bg-yellow-905/40 text-yellow-405 text-yellow-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-yellow-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                    >
-                      ⭐ Encourage Borderline Toppers
-                    </button>
-                  </div>
-
-                  {/* Lever 3: Olympiad Preparation */}
-                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-cyan-405 text-cyan-450 text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded uppercase">LEVER 3: OLYMPIAD PREPARATION</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.ioqmItems.length} at-risk</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Provide math practice sheets to students. This simulates raising their IOQM scores to achieve higher average scores.
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleBulkToggleIoqm}
-                      disabled={actionablePlan.ioqmItems.length === 0}
-                      className="w-full text-center bg-slate-900 hover:bg-slate-855 text-cyan-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-slate-800 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                    >
-                      🏆 Simulate Olympiad Training
-                    </button>
-                  </div>
-
-                  {/* Lever 4: Attendance Improvement */}
-                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-emerald-450 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded uppercase">LEVER 4: ATTENDANCE IMPROVEMENT</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.absentees.length} absent entries</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Call parents of absent students to ensure motivation. This simulates helping all students attend their tests.
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleBulkToggleAbsentees}
-                      disabled={actionablePlan.absentees.length === 0}
-                      className="w-full text-center bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-emerald-800/40 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                    >
-                      📅 Simulate 100% Attendance
-                    </button>
-                  </div>
-
-                  {/* Lever 5: Student Retention */}
-                  <div className="bg-slate-950 p-4 rounded-lg border border-slate-855 flex flex-col justify-between space-y-3 md:col-span-2">
-                    <div>
-                      <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-mono tracking-wider font-extrabold text-orange-455 text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded uppercase">LEVER 5: STUDENT RETENTION ISSUES</span>
-                        <span className="text-[10px] text-slate-500 font-mono">{actionablePlan.retentionItems.length} dropout/defaulter risks</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                        Resolve fees, parent doubts, and inactive status. This simulates retaining all of your students.
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleBulkToggleRetention}
-                      disabled={actionablePlan.retentionItems.length === 0}
-                      className="w-full text-center bg-orange-950/30 hover:bg-orange-900/40 text-orange-455 text-orange-400 py-1.5 rounded font-mono font-bold text-[10px] transition border border-orange-850/50 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                    >
-                      💸 Simulate 100% Retention
-                    </button>
-                  </div>
-
-                </div>
-
-                <div className="p-4 bg-slate-950 rounded-lg border border-slate-800 flex flex-col sm:flex-row items-center justify-between text-xs font-sans text-slate-400 gap-3">
-                  <div className="flex items-center gap-2">
-                    <Info className="w-4 h-4 text-cyan-400 shrink-0" />
-                    <span>Active simulated interventions: <strong className="font-mono text-yellow-455 text-yellow-400">{coachedStudentIds.length} pupils coached</strong>. Recalculations are processed on-the-fly.</span>
-                  </div>
-                  {coachedStudentIds.length > 0 && (
-                    <button
-                      onClick={handleResetSimulation}
-                      className="bg-slate-900 text-slate-200 border border-slate-850 hover:text-slate-50 hover:bg-slate-800 font-bold px-3 py-1 rounded transition text-[10px] cursor-pointer"
-                    >
-                      Restore Raw Stats
-                    </button>
-                  )}
-                </div>
-
-              </div>
-
             </div>
           )}
+
+
             </>
           )}
 

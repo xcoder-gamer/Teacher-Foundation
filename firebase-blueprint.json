@@ -32,12 +32,29 @@
         }
       },
       "required": ["coachedStudentIds", "selectedCenterName"]
+    },
+    "student_chunk": {
+      "title": "StudentChunk",
+      "description": "Batched subset of student records to bypass Firestore setDoc limitations and improve query speed",
+      "type": "object",
+      "properties": {
+        "chunkIndex": { "type": "number" },
+        "students": {
+          "type": "array"
+        },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["chunkIndex", "students", "updatedAt"]
     }
   },
   "firestore": {
     "students/{studentId}": {
       "schema": "student",
       "description": "Custom student ledger uploaded or synchronized from Google sheets or Excel workout templates"
+    },
+    "students_chunks/{chunkId}": {
+      "schema": "student_chunk",
+      "description": "Batched chunks of students custom database for optimal high-perf transactions"
     },
     "coaching/current": {
       "schema": "simulation",

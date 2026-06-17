@@ -742,10 +742,62 @@ export function calculateCenterMetrics(
   const centerStudents = centerName === "All Centers Combined" ? students : students.filter(s => s.center === centerName);
   const activeStudents = getActiveStudents(centerStudents);
 
+  // Compute region and combined_center dynamically
+  let region = "Uttar Pradesh";
+  let combined_center = "Lucknow Combined";
+
+  if (centerName === "All Centers Combined") {
+    region = "All Regions";
+    combined_center = "All Centers Combined";
+  } else {
+    // Find from students if any has it set
+    const withRegion = centerStudents.find(s => s.region && s.region.trim() !== "");
+    const withComb = centerStudents.find(s => s.combined_center && s.combined_center.trim() !== "");
+    if (withRegion?.region) {
+      region = withRegion.region;
+    } else {
+      const cn = centerName.toLowerCase();
+      if (cn.includes("lucknow") || cn.includes("lko")) {
+        region = "Uttar Pradesh";
+      } else if (cn.includes("kota") || cn.includes("raj")) {
+        region = "Rajasthan";
+      } else if (cn.includes("patna") || cn.includes("bihar")) {
+        region = "Bihar";
+      } else if (cn.includes("delhi") || cn.includes("ncr") || cn.includes("dw")) {
+        region = "Delhi NCR";
+      } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
+        region = "Karnataka";
+      } else {
+        region = "Uttar Pradesh";
+      }
+    }
+
+    if (withComb?.combined_center) {
+      combined_center = withComb.combined_center;
+    } else {
+      const cn = centerName.toLowerCase();
+      if (cn.includes("lucknow") || cn.includes("lko")) {
+        combined_center = "Lucknow Combined";
+      } else if (cn.includes("kota") || cn.includes("raj")) {
+        combined_center = "Kota Combined";
+      } else if (cn.includes("patna") || cn.includes("bihar")) {
+        combined_center = "Patna Combined";
+      } else if (cn.includes("delhi") || cn.includes("ncr") || cn.includes("dw")) {
+        combined_center = "Delhi Combined";
+      } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
+        combined_center = "Bangalore Combined";
+      } else {
+        combined_center = centerName.replace(" Centre", "").replace(" Center", "") + " Combined";
+      }
+    }
+  }
+
   if (activeStudents.length === 0) {
     return {
       centerName,
       activeStudents: 0,
+      region,
+      combined_center,
       subjectiveTestScore: 0,
       elementA_percent: 0,
       elementA_score: 0,
@@ -789,6 +841,8 @@ export function calculateCenterMetrics(
   return {
     centerName,
     activeStudents: activeStudents.length,
+    region,
+    combined_center,
     ...subjective,
     ...attendance,
     ...ioqm,
@@ -799,21 +853,156 @@ export function calculateCenterMetrics(
 }
 
 /**
- * Computes all center metrics, ranks them based on consolidated scoring,
- * and sets the .rank property for each.
+ * Resolves a student's region and combined_center dynamically with standard fallback lists.
  */
-export function getRankedCenters(students: Student[]): CenterScores[] {
-  // Get all unique centers in current dataset
-  const centers = Array.from(new Set(students.map(s => s.center)));
-  
-  // Calculate raw scores
-  const results = centers.map(c => calculateCenterMetrics(c, students));
-  
-  // Sort descending by consolidated score to apply rankings
+export function getStudentRegionAndCombinedCenter(s: Student): { region: string; combined_center: string } {
+  let region = s.region;
+  let combined_center = s.combined_center;
+
+  if (!region || region.trim() === "") {
+    const cn = s.center.toLowerCase();
+    if (cn.includes("lucknow") || cn.includes("lko")) {
+      region = "Uttar Pradesh";
+    } else if (cn.includes("kota") || cn.includes("raj")) {
+      region = "Rajasthan";
+    } else if (cn.includes("patna") || cn.includes("bihar")) {
+      region = "Bihar";
+    } else if (cn.includes("delhi") || cn.includes("ncr") || cn.includes("dw")) {
+      region = "Delhi NCR";
+    } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
+      region = "Karnataka";
+    } else {
+      region = "Uttar Pradesh";
+    }
+  }
+
+  if (!combined_center || combined_center.trim() === "") {
+    const cn = s.center.toLowerCase();
+    if (cn.includes("lucknow") || cn.includes("lko")) {
+      combined_center = "Lucknow Combined";
+    } else if (cn.includes("kota") || cn.includes("raj")) {
+      combined_center = "Kota Combined";
+    } else if (cn.includes("patna") || cn.includes("bihar")) {
+      combined_center = "Patna Combined";
+    } else if (cn.includes("delhi") || cn.includes("ncr") || cn.includes("dw")) {
+      combined_center = "Delhi Combined";
+    } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
+      combined_center = "Bangalore Combined";
+    } else {
+      combined_center = s.center.replace(" Centre", "").replace(" Center", "") + " Combined";
+    }
+  }
+
+  return { region, combined_center };
+}
+
+/**
+ * Computes metrics, groups them by Region, Combined Center, or Individual Center,
+ * and ranks them based on consolidated scoring.
+ */
+export function getRankedMetricGroups(
+  studentsList: Student[],
+  level: "region" | "combined_center" | "center"
+): CenterScores[] {
+  // Map every student's region/combined_center/center fully to ensure there are no blanks
+  const studentsWithMeta = studentsList.map(s => {
+    const { region, combined_center } = getStudentRegionAndCombinedCenter(s);
+    return {
+      ...s,
+      region,
+      combined_center
+    };
+  });
+
+  // Determine unique group keys based on chosen grouping level
+  let groupKeys: string[] = [];
+  if (level === "region") {
+    groupKeys = Array.from(new Set(studentsWithMeta.map(s => s.region)));
+  } else if (level === "combined_center") {
+    groupKeys = Array.from(new Set(studentsWithMeta.map(s => s.combined_center)));
+  } else {
+    groupKeys = Array.from(new Set(studentsWithMeta.map(s => s.center)));
+  }
+
+  // Filter out any empty/null/undefined keys
+  groupKeys = groupKeys.filter(k => k && k.trim() !== "");
+
+  // Compute metrics for each group
+  const results = groupKeys.map(key => {
+    // Filter students belonging to this group
+    const groupStudents = studentsWithMeta.filter(s => {
+      if (level === "region") return s.region === key;
+      if (level === "combined_center") return s.combined_center === key;
+      return s.center === key;
+    });
+
+    const activeStudents = getActiveStudents(groupStudents);
+
+    if (activeStudents.length === 0) {
+      return {
+        centerName: key,
+        activeStudents: 0,
+        region: key,
+        combined_center: key,
+        subjectiveTestScore: 0,
+        elementA_percent: 0,
+        elementA_score: 0,
+        elementB_percent: 0,
+        elementB_score: 0,
+        testAttendanceScore: 0,
+        attendance_percent: 0,
+        ioqmScore: 0,
+        ioqm_percent: 0,
+        rampUpScore: 0,
+        rampUp_percent: 0,
+        studentRetentionScore: 0,
+        retention_percent: 0,
+        consolidatedScore: 0
+      };
+    }
+
+    const subjective = calculateSubjectiveTestScore(groupStudents);
+    const attendance = calculateTestAttendanceScore(groupStudents);
+    const ioqm = calculateIoqmScore(groupStudents);
+    const rampUp = calculateRampUpScore(groupStudents);
+    const retention = calculateStudentRetentionScore(groupStudents);
+
+    const consolidatedScore = 
+      (subjective.subjectiveTestScore * 0.25) +
+      (ioqm.ioqmScore * 0.20) +
+      (rampUp.rampUpScore * 0.15) +
+      (attendance.testAttendanceScore * 0.10) +
+      (retention.studentRetentionScore * 0.30);
+
+    const rep = groupStudents[0];
+
+    return {
+      centerName: key,
+      activeStudents: activeStudents.length,
+      region: rep ? rep.region : key,
+      combined_center: rep ? rep.combined_center : key,
+      ...subjective,
+      ...attendance,
+      ...ioqm,
+      ...rampUp,
+      ...retention,
+      consolidatedScore
+    };
+  });
+
+  // Sort descending by consolidatedScore
   results.sort((a, b) => b.consolidatedScore - a.consolidatedScore);
-  
+
   return results.map((res, index) => ({
     ...res,
     rank: index + 1
   }));
+}
+
+/**
+ * Computes all center metrics, ranks them based on consolidated scoring,
+ * and sets the .rank property for each. (Center level)
+ */
+export function getRankedCenters(students: Student[]): CenterScores[] {
+  return getRankedMetricGroups(students, "center");
 }

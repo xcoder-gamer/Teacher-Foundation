@@ -10,6 +10,8 @@ import {
   Clipboard,
   Check,
   Sliders,
+  Settings,
+  ShieldAlert,
 } from "lucide-react";
 import {
   generateRetentionCSVTemplateString,
@@ -19,6 +21,7 @@ import {
   generateRampUpCSVTemplateString,
 } from "../utils/excel";
 import { generateCSVTemplateString } from "../auth";
+import firebaseConfig from "../../firebase-applet-config.json";
 
 interface DailyLedgerImporterProps {
   students: Student[];
@@ -47,6 +50,10 @@ interface DailyLedgerImporterProps {
   isAdmin?: boolean;
   googleUser?: any;
   handleGoogleLogin?: () => void;
+  authError?: string | null;
+  setAuthError?: (err: string | null) => void;
+  customAdmins?: string[];
+  setCustomAdmins?: (admins: string[]) => void;
 }
 
 export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
@@ -76,9 +83,76 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
   isAdmin = true,
   googleUser = null,
   handleGoogleLogin,
+  authError = null,
+  setAuthError,
+  customAdmins = [],
+  setCustomAdmins,
 }) => {
   const [selectedGuideFormat, setSelectedGuideFormat] = React.useState<"master" | "retention" | "results" | "attendance" | "ioqm" | "rampup">("master");
   const [localCopied, setLocalCopied] = React.useState(false);
+
+  // States for customizing Firebase connections and Admin email list
+  const [showConfigSettings, setShowConfigSettings] = React.useState(false);
+  const [configJson, setConfigJson] = React.useState(() => {
+    try {
+      const saved = localStorage.getItem("custom_firebase_config");
+      return saved ? JSON.stringify(JSON.parse(saved), null, 2) : JSON.stringify(firebaseConfig, null, 2);
+    } catch {
+      return JSON.stringify(firebaseConfig, null, 2);
+    }
+  });
+  const [adminEmailsInput, setAdminEmailsInput] = React.useState(() => {
+    return customAdmins.join(", ");
+  });
+
+  const handleSaveConfig = () => {
+    try {
+      const parsed = JSON.parse(configJson);
+      if (!parsed || typeof parsed !== "object" || !parsed.projectId) {
+        alert("❌ Invalid Firebase Configuration JSON. It must contain 'projectId'.");
+        return;
+      }
+      localStorage.setItem("custom_firebase_config", JSON.stringify(parsed));
+      
+      const emails = adminEmailsInput
+        .split(",")
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e.length > 0);
+      
+      localStorage.setItem("custom_admin_emails", JSON.stringify(emails));
+      if (setCustomAdmins) {
+        setCustomAdmins(emails);
+      }
+
+      alert("🎉 Connection config saved! Reloading application to connect with your new Firebase project...");
+      window.location.reload();
+    } catch (err: any) {
+      alert(`❌ Error parsing JSON: ${err.message || err}`);
+    }
+  };
+
+  const handleResetToDefaultConfig = () => {
+    if (window.confirm("Are you sure you want to revert to the default sandbox Firebase database?")) {
+      localStorage.removeItem("custom_firebase_config");
+      localStorage.removeItem("custom_admin_emails");
+      alert("Reverted to default. App will reload now...");
+      window.location.reload();
+    }
+  };
+
+  const handleSelfPromoteAdmin = () => {
+    if (googleUser?.email) {
+      const updatedAdmins = Array.from(new Set([...customAdmins, googleUser.email]));
+      localStorage.setItem("custom_admin_emails", JSON.stringify(updatedAdmins));
+      if (setCustomAdmins) {
+        setCustomAdmins(updatedAdmins);
+      }
+      setAdminEmailsInput(updatedAdmins.join(", "));
+      alert(`🔑 Successfully authorized you (${googleUser.email}) as an Administrator!`);
+    } else {
+      alert("❌ You are not signed in yet. Please sign in with Google first!");
+    }
+  };
 
   // Synchronize guide tabs with selected upload matrix for visual consistency
   React.useEffect(() => {
@@ -359,16 +433,50 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
               <div className="space-y-2 max-w-sm">
                 <h4 className="text-sm font-bold text-slate-100 font-display">🔒 Administrative Ledger Gating</h4>
                 <p className="text-[11.5px] text-slate-400 leading-relaxed">
-                  Student database write access, schema updates, and live matrix spreadsheet uploader are restricted to the authorized admin:
+                  Student database write access, schema updates, and live matrix spreadsheet uploader are restricted to the authorized admins:
                 </p>
-                <div className="bg-slate-900 border border-slate-850 py-1.5 px-3 rounded font-mono text-[10.5px] text-yellow-400 select-all font-bold tracking-tight">
-                  sharma.devansh987@gmail.com
+                <div className="flex flex-col gap-1 bg-slate-900 border border-slate-850 py-2 px-3 rounded font-mono text-[10.5px] font-bold tracking-tight text-center">
+                  <div className="text-yellow-400 select-all">gurukul.ops@pw.live</div>
+                  <div className="text-slate-400 border-t border-slate-800/40 pt-1 mt-1 text-[10px] select-all">sharma.devansh987@gmail.com</div>
                 </div>
               </div>
 
               {!googleUser ? (
-                <div className="space-y-3 pt-2">
-                  <p className="text-[10px] text-slate-500 italic max-w-xs leading-normal">
+                <div className="space-y-3 pt-2 w-full">
+                  {authError && (
+                    <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3 text-left space-y-2 max-w-sm mx-auto">
+                      <div className="flex gap-2 items-start">
+                        <AlertCircle className="w-4 h-4 text-rose-450 text-rose-400 shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                          <p className="text-[10.5px] font-bold text-rose-200">
+                            {authError === "unauthorized-domain" ? "Domain Unauthorized" : "Login Failed"}
+                          </p>
+                          <p className="text-[10px] text-rose-300 leading-normal">
+                            {authError === "unauthorized-domain" ? (
+                              <span>
+                                The domain <code className="bg-slate-905 bg-slate-900 px-1 py-0.5 rounded text-yellow-500 font-mono select-all font-bold text-[9.5px]">{window.location.hostname}</code> has not been authorized in Firebase console settings.
+                              </span>
+                            ) : (
+                              <span>{authError}</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      {authError === "unauthorized-domain" && (
+                        <div className="text-[9.5px] text-slate-400 space-y-1.5 mt-1 border-t border-rose-500/15 pt-1.5 leading-normal">
+                          <p className="font-semibold text-slate-300">How to authorize this domain:</p>
+                          <ol className="list-decimal list-inside space-y-1 pl-0.5">
+                            <li>Open your <a href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`} target="_blank" rel="noreferrer" className="text-yellow-400 hover:text-yellow-300 underline font-semibold transition">Firebase Console Settings</a></li>
+                            <li>Navigate to <strong>Authentication → Settings → Authorized Domains</strong></li>
+                            <li>Click <strong>Add domain</strong> and add: <code className="bg-slate-950 px-1.5 py-0.5 rounded text-yellow-500 font-mono select-all select-word">{window.location.hostname}</code></li>
+                          </ol>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-slate-500 italic max-w-xs leading-normal mx-auto">
                     If you are the admin, please authenticate using Google to activate write privileges.
                   </p>
                   <button
@@ -499,6 +607,112 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
               )}
             </div>
           )}
+
+          {/* DYNAMIC FIREBASE CONNECTION & ACCESS CONFIGURATION */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5.5 space-y-3.5 shadow-xl relative overflow-hidden transition-all duration-300 mt-2">
+            <button
+              onClick={() => setShowConfigSettings(!showConfigSettings)}
+              className="w-full flex items-center justify-between text-left text-xs font-bold text-slate-300 hover:text-white transition cursor-pointer select-none"
+              id="toggle-firebase-settings-btn"
+            >
+              <span className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-yellow-500 animate-spin-slow" />
+                <span>⚙️ Connection & Admin Access Manager</span>
+              </span>
+              <span className="text-[10px] text-yellow-500/70 font-mono bg-yellow-500/5 border border-yellow-500/10 px-2 py-0.5 rounded font-bold">
+                {showConfigSettings ? "CLOSE ▲" : "CONFIGURE ▼"}
+              </span>
+            </button>
+
+            {showConfigSettings && (
+              <div className="space-y-4 pt-3.5 border-t border-slate-800 animate-fade-in text-left">
+                <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                  Use this manager to link the applet to **your own custom/billing-enabled Firebase database** (where you added money). You can also add or authorize any Google email IDs as Administrators to bypass gating during development testing.
+                </p>
+
+                {/* QUICK SELF-PROMOTE ADMIN SHORTCUT */}
+                {googleUser && (
+                  <div className={`p-3.5 rounded-lg border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    isAdmin 
+                      ? "bg-emerald-500/5 border-emerald-500/15" 
+                      : "bg-amber-500/5 border-amber-500/15"
+                  }`}>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-bold text-slate-200">
+                        🔑 Admin Status Control
+                      </p>
+                      <p className="text-[10.5px] text-slate-400">
+                        Current Account: <strong className="text-yellow-400 font-mono">{googleUser.email}</strong> 
+                        {isAdmin ? <span className="text-emerald-400 font-bold ml-1.5">(✓ Admin Active)</span> : <span className="text-rose-400 font-bold ml-1.5">(✗ View-Only Restricted)</span>}
+                      </p>
+                    </div>
+                    
+                    {!isAdmin && (
+                      <button
+                        onClick={handleSelfPromoteAdmin}
+                        className="bg-yellow-500 hover:bg-yellow-600 text-slate-950 font-extrabold px-3 py-1.5 rounded text-[10px] transition cursor-pointer self-start sm:self-center shrink-0 active:scale-95 shadow-md font-sans"
+                      >
+                        Authorize & Self-Promote as Admin
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* DUAL MODE TABS OR INPUTS */}
+                <div className="space-y-3.5">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                      Custom Firebase Client Config (JSON):
+                    </label>
+                    <textarea
+                      value={configJson}
+                      onChange={(e) => setConfigJson(e.target.value)}
+                      rows={6}
+                      className="w-full bg-slate-950 text-emerald-400 font-mono text-[10px] p-2.5 rounded-lg border border-slate-800 focus:border-yellow-500/40 focus:outline-none focus:ring-1 focus:ring-yellow-500/40 resize-y leading-tight font-bold"
+                      placeholder="{ ... }"
+                    />
+                    <p className="text-[9.5px] text-slate-500 font-mono leading-normal">
+                      Prepopulated with default config. Replace with your custom credentials block containing <code className="bg-slate-950 px-1 py-0.2 select-all rounded text-yellow-500">projectId</code>, <code className="bg-slate-950 px-1 py-0.2 select-all rounded text-yellow-500">apiKey</code>, and <code className="bg-slate-950 px-1 py-0.2 select-all rounded text-yellow-500">firestoreDatabaseId</code>.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                      Additional Custom Authorized Administrators (Emails):
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full bg-slate-950 text-slate-205 text-slate-200 text-[11px] font-semibold px-3 py-2 rounded-lg border border-slate-800 focus:border-yellow-500/40 focus:outline-none focus:ring-1 focus:ring-yellow-500/40 font-mono"
+                      value={adminEmailsInput}
+                      onChange={(e) => setAdminEmailsInput(e.target.value)}
+                      placeholder="e.g. sharma.devansh9877@gmail.com, anotheremail@gmail.com"
+                    />
+                    <p className="text-[9.5px] text-slate-500 leading-normal">
+                      Comma-separated list of extra email IDs granted upload and database save capabilities.
+                    </p>
+                  </div>
+                </div>
+
+                {/* CONTROLS */}
+                <div className="flex flex-wrap gap-2 pt-3 border-t border-slate-800">
+                  <button
+                    onClick={handleSaveConfig}
+                    className="bg-yellow-500 hover:bg-yellow-600 text-slate-950 font-black px-4 py-2.5 rounded-lg text-[11px] transition cursor-pointer active:scale-98 shadow-md"
+                  >
+                    💾 Save & Connect My Sandbox Project
+                  </button>
+                  <button
+                    onClick={handleResetToDefaultConfig}
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2.5 rounded-lg text-[11px] transition cursor-pointer active:scale-98"
+                  >
+                    🔄 Revert to Defaults
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

@@ -3,6 +3,50 @@ import { Student } from "../types";
 import { getRankedCenters } from "../data";
 
 /**
+ * Resolves a student's region and combined_center dynamically with standard fallback lists.
+ */
+export function getRegionAndCombinedCenter(s: any): { region: string; combined_center: string } {
+  let region = s.region;
+  let combined_center = s.combined_center;
+
+  if (!region || String(region).trim() === "") {
+    const cn = String(s.center || "").toLowerCase();
+    if (cn.includes("lucknow") || cn.includes("lko")) {
+      region = "Uttar Pradesh";
+    } else if (cn.includes("kota") || cn.includes("raj")) {
+      region = "Rajasthan";
+    } else if (cn.includes("patna") || cn.includes("bihar")) {
+      region = "Bihar";
+    } else if (cn.includes("delhi") || cn.includes("ncr") || cn.includes("dw")) {
+      region = "Delhi NCR";
+    } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
+      region = "Karnataka";
+    } else {
+      region = "Uttar Pradesh";
+    }
+  }
+
+  if (!combined_center || String(combined_center).trim() === "") {
+    const cn = String(s.center || "").toLowerCase();
+    if (cn.includes("lucknow") || cn.includes("lko")) {
+      combined_center = "Lucknow Combined";
+    } else if (cn.includes("kota") || cn.includes("raj")) {
+      combined_center = "Kota Combined";
+    } else if (cn.includes("patna") || cn.includes("bihar")) {
+      combined_center = "Patna Combined";
+    } else if (cn.includes("delhi") || cn.includes("ncr") || cn.includes("dw")) {
+      combined_center = "Delhi Combined";
+    } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
+      combined_center = "Bangalore Combined";
+    } else {
+      combined_center = String(s.center || "").replace(" Centre", "").replace(" Center", "") + " Combined";
+    }
+  }
+
+  return { region, combined_center };
+}
+
+/**
  * Downloads a list of student records in a formatted .xlsx (Excel) workbook with three worksheets:
  * 1. "Students Ledger": Complete student rows so that users can edit and re-upload seamlessly.
  * 2. "Center Rankings & Scores": Real-time computed matrices and score breakdowns based on the current dataset.
@@ -19,6 +63,8 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
       "Student ID",
       "Student Name",
       "Grade (9, 10, 11, 12)",
+      "Region",
+      "Combined CenterName",
       "Center Name",
       "Test 1 Attendance (Present/Absent)",
       "Test 2 Attendance (Present/Absent)",
@@ -33,29 +79,36 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
       "Retained (Yes/No)"
     ];
 
-    const rows = studentsList.map(s => [
-      s.id,
-      s.name,
-      s.grade,
-      s.center,
-      s.t1_attendance,
-      s.t2_attendance,
-      s.t1_scores.physics !== undefined ? s.t1_scores.physics : "",
-      s.t1_scores.chemistry !== undefined ? s.t1_scores.chemistry : "",
-      s.t1_scores.maths !== undefined ? s.t1_scores.maths : "",
-      s.t2_scores.physics !== undefined ? s.t2_scores.physics : "",
-      s.t2_scores.chemistry !== undefined ? s.t2_scores.chemistry : "",
-      s.t2_scores.maths !== undefined ? s.t2_scores.maths : "",
-      s.ioqm_score,
-      s.ramp_up_score !== undefined ? s.ramp_up_score : "",
-      s.retained ? "Yes" : "No"
-    ]);
+    const rows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
+      return [
+        s.id,
+        s.name,
+        s.grade,
+        region,
+        combined_center,
+        s.center,
+        s.t1_attendance,
+        s.t2_attendance,
+        s.t1_scores.physics !== undefined ? s.t1_scores.physics : "",
+        s.t1_scores.chemistry !== undefined ? s.t1_scores.chemistry : "",
+        s.t1_scores.maths !== undefined ? s.t1_scores.maths : "",
+        s.t2_scores.physics !== undefined ? s.t2_scores.physics : "",
+        s.t2_scores.chemistry !== undefined ? s.t2_scores.chemistry : "",
+        s.t2_scores.maths !== undefined ? s.t2_scores.maths : "",
+        s.ioqm_score,
+        s.ramp_up_score !== undefined ? s.ramp_up_score : "",
+        s.retained ? "Yes" : "No"
+      ];
+    });
 
     const ws_ledger = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     ws_ledger["!cols"] = [
       { wch: 15 }, // Student ID
       { wch: 22 }, // Student Name
       { wch: 15 }, // Grade
+      { wch: 18 }, // Region
+      { wch: 20 }, // Combined Center
       { wch: 24 }, // Center Name
       { wch: 20 }, // T1 Attendance
       { wch: 20 }, // T2 Attendance
@@ -78,6 +131,7 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
       "regno",
       "region",
       "combined_center",
+      "center",
       "cohort",
       "batch",
       "student_name",
@@ -87,24 +141,29 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
       "Retention"
     ];
 
-    const retentionRows = studentsList.map(s => [
-      s.id,
-      s.region || (s.center.toLowerCase().includes("lucknow") ? "Uttar Pradesh" : "Rajasthan"),
-      s.center,
-      s.grade ? `${s.grade}th Foundation` : "10th Foundation",
-      s.batch || "11-NF101EA",
-      s.name,
-      s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
-      s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
-      s.inactive || (s.retained ? "" : "Inactive"),
-      s.retained ? "Yes" : "No"
-    ]);
+    const retentionRows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
+      return [
+        s.id,
+        region,
+        combined_center,
+        s.center,
+        s.grade ? `${s.grade}th Foundation` : "10th Foundation",
+        s.batch || "11-NF101EA",
+        s.name,
+        s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
+        s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
+        s.inactive || (s.retained ? "" : "Inactive"),
+        s.retained ? "Yes" : "No"
+      ];
+    });
 
     const ws_retention = XLSX.utils.aoa_to_sheet([retentionHeaders, ...retentionRows]);
     ws_retention["!cols"] = [
       { wch: 15 }, // regno
       { wch: 15 }, // region
-      { wch: 24 }, // combined_center
+      { wch: 20 }, // combined_center
+      { wch: 24 }, // center
       { wch: 18 }, // cohort
       { wch: 15 }, // batch
       { wch: 22 }, // student_name
@@ -119,24 +178,14 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
     // WORKSHEET 3: Results Ledger (Format #2)
     // =====================================
     const resultHeaders = [
+      "Test No.",
+      "region",
+      "combined_center",
       "center",
       "registration_number",
       "name_of_students",
       "batch",
       "class",
-      "test_date",
-      "test_name",
-      "attendance",
-      "sst",
-      "urdu",
-      "maths",
-      "english",
-      "science",
-      "english_languageicse",
-      "sst_icse",
-      "total_marks",
-      "subject_total_marks",
-      "total_obtained",
       "sst_pct",
       "urdu_pct",
       "maths_pct",
@@ -145,6 +194,7 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
     ];
 
     const resultRows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
       const attendanceVal = s.attendance || (s.t2_attendance === "Present" ? "Present" : "Absent");
       const isAbsent = attendanceVal.toLowerCase().includes("abs") || attendanceVal.toLowerCase().includes("no");
       
@@ -154,36 +204,15 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
       const pSst = s.sst_pct ?? s.t1_scores.physics ?? (isAbsent ? undefined : 75);
       const pUrdu = s.urdu_pct ?? s.t1_scores.chemistry ?? (isAbsent ? undefined : 80);
 
-      // Convert percentages to out-of-40 absolute score helper
-      const calcAbs = (pct?: number) => pct !== undefined ? Math.round((pct / 100) * 40) : "";
-
-      const sstAbs = calcAbs(pSst);
-      const urduAbs = calcAbs(pUrdu);
-      const mathsAbs = calcAbs(pMaths);
-      const englishAbs = calcAbs(pEnglish);
-      const scienceAbs = calcAbs(pScience);
-
-      const totalObtained = isAbsent ? 0 : [sstAbs, urduAbs, mathsAbs, englishAbs, scienceAbs].reduce((sum: number, cur) => sum + (typeof cur === "number" ? cur : 0), 0);
-
       return [
+        s.test_no || "Test 1",
+        region,
+        combined_center,
         s.center,
         s.id,
         s.name,
         s.batch || "44-UP121ES",
         s.grade,
-        s.test_date || "25 May, 2026",
-        s.test_name || "Term II Subjective Test - 2",
-        attendanceVal,
-        sstAbs,
-        urduAbs,
-        mathsAbs,
-        englishAbs,
-        scienceAbs,
-        "", // english_languageicse
-        "", // sst_icse
-        200, // total_marks
-        40,  // subject_total_marks
-        totalObtained,
         pSst !== undefined ? `${pSst}%` : "",
         pUrdu !== undefined ? `${pUrdu}%` : "",
         pMaths !== undefined ? `${pMaths}%` : "",
@@ -194,24 +223,14 @@ export function downloadStudentsXLSX(studentsList: Student[], fileName: string) 
 
     const ws_results = XLSX.utils.aoa_to_sheet([resultHeaders, ...resultRows]);
     ws_results["!cols"] = [
+      { wch: 12 }, // Test No.
+      { wch: 15 }, // region
+      { wch: 20 }, // combined_center
       { wch: 24 }, // center
       { wch: 15 }, // registration_number
       { wch: 22 }, // name_of_students
       { wch: 15 }, // batch
       { wch: 10 }, // class
-      { wch: 15 }, // test_date
-      { wch: 25 }, // test_name
-      { wch: 15 }, // attendance
-      { wch: 8 },  // sst
-      { wch: 8 },  // urdu
-      { wch: 8 },  // maths
-      { wch: 8 },  // english
-      { wch: 8 },  // science
-      { wch: 15 }, // english_icse
-      { wch: 10 }, // sst_icse
-      { wch: 12 }, // total_marks
-      { wch: 15 }, // subject_total_marks
-      { wch: 15 }, // total_obtained
       { wch: 10 }, // sst_pct
       { wch: 10 }, // urdu_pct
       { wch: 10 }, // maths_pct
@@ -426,6 +445,7 @@ export function downloadRetentionXLSX(studentsList: Student[], fileName: string)
       "regno",
       "region",
       "combined_center",
+      "center",
       "cohort",
       "batch",
       "student_name",
@@ -435,24 +455,29 @@ export function downloadRetentionXLSX(studentsList: Student[], fileName: string)
       "Retention"
     ];
 
-    const retentionRows = studentsList.map(s => [
-      s.id,
-      s.region || (s.center.toLowerCase().includes("lucknow") ? "Uttar Pradesh" : "Rajasthan"),
-      s.center,
-      s.grade ? `${s.grade}th Foundation` : "10th Foundation",
-      s.batch || "11-NF101EA",
-      s.name,
-      s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
-      s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
-      s.inactive || (s.retained ? "" : "Inactive"),
-      s.retained ? "Yes" : "No"
-    ]);
+    const retentionRows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
+      return [
+        s.id,
+        region,
+        combined_center,
+        s.center,
+        s.grade ? `${s.grade}th Foundation` : "10th Foundation",
+        s.batch || "11-NF101EA",
+        s.name,
+        s.defaulter_status || (s.retained ? "Not Defaulter" : "2nd EMI Defaulter"),
+        s.admission_cancellation || (s.retained ? "" : "Cancellation Requested"),
+        s.inactive || (s.retained ? "" : "Inactive"),
+        s.retained ? "Yes" : "No"
+      ];
+    });
 
     const ws_retention = XLSX.utils.aoa_to_sheet([retentionHeaders, ...retentionRows]);
     ws_retention["!cols"] = [
       { wch: 15 }, // regno
       { wch: 15 }, // region
-      { wch: 24 }, // combined_center
+      { wch: 20 }, // combined_center
+      { wch: 24 }, // center
       { wch: 18 }, // cohort
       { wch: 15 }, // batch
       { wch: 22 }, // student_name
@@ -475,24 +500,14 @@ export function downloadResultsXLSX(studentsList: Student[], fileName: string) {
   try {
     const wb = XLSX.utils.book_new();
     const resultHeaders = [
+      "Test No.",
+      "region",
+      "combined_center",
       "center",
       "registration_number",
       "name_of_students",
       "batch",
       "class",
-      "test_date",
-      "test_name",
-      "attendance",
-      "sst",
-      "urdu",
-      "maths",
-      "english",
-      "science",
-      "english_languageicse",
-      "sst_icse",
-      "total_marks",
-      "subject_total_marks",
-      "total_obtained",
       "sst_pct",
       "urdu_pct",
       "maths_pct",
@@ -501,6 +516,7 @@ export function downloadResultsXLSX(studentsList: Student[], fileName: string) {
     ];
 
     const resultRows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
       const attendanceVal = s.attendance || (s.t2_attendance === "Present" ? "Present" : "Absent");
       const isAbsent = attendanceVal.toLowerCase().includes("abs") || attendanceVal.toLowerCase().includes("no");
       
@@ -510,35 +526,15 @@ export function downloadResultsXLSX(studentsList: Student[], fileName: string) {
       const pSst = s.sst_pct ?? s.t1_scores.physics ?? (isAbsent ? undefined : 75);
       const pUrdu = s.urdu_pct ?? s.t1_scores.chemistry ?? (isAbsent ? undefined : 80);
 
-      const calcAbs = (pct?: number) => pct !== undefined ? Math.round((pct / 100) * 40) : "";
-
-      const sstAbs = calcAbs(pSst);
-      const urduAbs = calcAbs(pUrdu);
-      const mathsAbs = calcAbs(pMaths);
-      const englishAbs = calcAbs(pEnglish);
-      const scienceAbs = calcAbs(pScience);
-
-      const totalObtained = isAbsent ? 0 : [sstAbs, urduAbs, mathsAbs, englishAbs, scienceAbs].reduce((sum: number, cur) => sum + (typeof cur === "number" ? cur : 0), 0);
-
       return [
+        s.test_no || "Test 1",
+        region,
+        combined_center,
         s.center,
         s.id,
         s.name,
         s.batch || "44-UP121ES",
         s.grade,
-        s.test_date || "25 May, 2026",
-        s.test_name || "Term II Subjective Test - 2",
-        attendanceVal,
-        sstAbs,
-        urduAbs,
-        mathsAbs,
-        englishAbs,
-        scienceAbs,
-        "", // english_languageicse
-        "", // sst_icse
-        200, // total_marks
-        40,  // subject_total_marks
-        totalObtained,
         pSst !== undefined ? `${pSst}%` : "",
         pUrdu !== undefined ? `${pUrdu}%` : "",
         pMaths !== undefined ? `${pMaths}%` : "",
@@ -549,24 +545,14 @@ export function downloadResultsXLSX(studentsList: Student[], fileName: string) {
 
     const ws_results = XLSX.utils.aoa_to_sheet([resultHeaders, ...resultRows]);
     ws_results["!cols"] = [
+      { wch: 12 }, // Test No.
+      { wch: 15 }, // region
+      { wch: 20 }, // combined_center
       { wch: 24 }, // center
       { wch: 15 }, // registration_number
       { wch: 22 }, // name_of_students
       { wch: 15 }, // batch
       { wch: 10 }, // class
-      { wch: 15 }, // test_date
-      { wch: 25 }, // test_name
-      { wch: 15 }, // attendance
-      { wch: 8 },  // sst
-      { wch: 8 },  // urdu
-      { wch: 8 },  // maths
-      { wch: 8 },  // english
-      { wch: 8 },  // science
-      { wch: 15 }, // english_icse
-      { wch: 10 }, // sst_icse
-      { wch: 12 }, // total_marks
-      { wch: 15 }, // subject_total_marks
-      { wch: 15 }, // total_obtained
       { wch: 10 }, // sst_pct
       { wch: 10 }, // urdu_pct
       { wch: 10 }, // maths_pct
@@ -588,6 +574,7 @@ export function generateRetentionCSVTemplateString(studentsList: Student[]): str
     "regno",
     "region",
     "combined_center",
+    "center",
     "cohort",
     "batch",
     "student_name",
@@ -600,9 +587,11 @@ export function generateRetentionCSVTemplateString(studentsList: Student[]): str
   const lines = [retentionHeaders.join(",")];
 
   studentsList.forEach(s => {
+    const { region, combined_center } = getRegionAndCombinedCenter(s);
     const row = [
       s.id,
-      s.region || (s.center.toLowerCase().includes("lucknow") ? "Uttar Pradesh" : "Rajasthan"),
+      region,
+      `"${combined_center.replace(/"/g, '""')}"`,
       `"${s.center.replace(/"/g, '""')}"`,
       s.grade ? `"${s.grade}th Foundation"` : `"10th Foundation"`,
       s.batch || "11-NF101EA",
@@ -623,24 +612,14 @@ export function generateRetentionCSVTemplateString(studentsList: Student[]): str
  */
 export function generateResultsCSVTemplateString(studentsList: Student[]): string {
   const resultHeaders = [
+    "Test No.",
+    "region",
+    "combined_center",
     "center",
     "registration_number",
     "name_of_students",
     "batch",
     "class",
-    "test_date",
-    "test_name",
-    "attendance",
-    "sst",
-    "urdu",
-    "maths",
-    "english",
-    "science",
-    "english_languageicse",
-    "sst_icse",
-    "total_marks",
-    "subject_total_marks",
-    "total_obtained",
     "sst_pct",
     "urdu_pct",
     "maths_pct",
@@ -651,6 +630,7 @@ export function generateResultsCSVTemplateString(studentsList: Student[]): strin
   const lines = [resultHeaders.join(",")];
 
   studentsList.forEach(s => {
+    const { region, combined_center } = getRegionAndCombinedCenter(s);
     const attendanceVal = s.attendance || (s.t2_attendance === "Present" ? "Present" : "Absent");
     const isAbsent = attendanceVal.toLowerCase().includes("abs") || attendanceVal.toLowerCase().includes("no");
     
@@ -660,35 +640,15 @@ export function generateResultsCSVTemplateString(studentsList: Student[]): strin
     const pSst = s.sst_pct ?? s.t1_scores.physics ?? (isAbsent ? undefined : 75);
     const pUrdu = s.urdu_pct ?? s.t1_scores.chemistry ?? (isAbsent ? undefined : 80);
 
-    const calcAbs = (pct?: number) => pct !== undefined ? Math.round((pct / 100) * 40) : "";
-
-    const sstAbs = calcAbs(pSst);
-    const urduAbs = calcAbs(pUrdu);
-    const mathsAbs = calcAbs(pMaths);
-    const englishAbs = calcAbs(pEnglish);
-    const scienceAbs = calcAbs(pScience);
-
-    const totalObtained = isAbsent ? 0 : [sstAbs, urduAbs, mathsAbs, englishAbs, scienceAbs].reduce((sum: number, cur) => sum + (typeof cur === "number" ? cur : 0), 0);
-
     const row = [
+      s.test_no || "Test 1",
+      region,
+      `"${combined_center.replace(/"/g, '""')}"`,
       `"${s.center.replace(/"/g, '""')}"`,
       s.id,
       `"${s.name.replace(/"/g, '""')}"`,
       s.batch || "44-UP121ES",
       s.grade,
-      s.test_date || "25 May, 2026",
-      s.test_name || "Term II Subjective Test - 2",
-      attendanceVal,
-      sstAbs,
-      urduAbs,
-      mathsAbs,
-      englishAbs,
-      scienceAbs,
-      "", // english_languageicse
-      "", // sst_icse
-      200, // total_marks
-      40,  // subject_total_marks
-      totalObtained,
       pSst !== undefined ? `${pSst}%` : "",
       pUrdu !== undefined ? `${pUrdu}%` : "",
       pMaths !== undefined ? `${pMaths}%` : "",
@@ -705,14 +665,44 @@ export function generateResultsCSVTemplateString(studentsList: Student[]): strin
  * Generates formatted CSV for Test Attendance template
  */
 export function generateAttendanceCSVTemplateString(studentsList: Student[]): string {
-  const headers = ["Student ID", "Student Name", "Test 1 Attendance (Present/Absent)", "Test 2 Attendance (Present/Absent)"];
+  const headers = [
+    "TestNo.",
+    "region",
+    "combined_center",
+    "center",
+    "registration_number",
+    "name_of_students",
+    "total subject",
+    "test attendance"
+  ];
   const lines = [headers.join(",")];
   studentsList.forEach(s => {
+    const { region, combined_center } = getRegionAndCombinedCenter(s);
+    const isAbsent = s.attendance?.toLowerCase().includes("abs") || (s.t1_attendance === "Absent" && s.t2_attendance === "Absent");
+    
+    const math = s.maths_pct ?? s.t2_scores.maths;
+    const sci = s.science_pct ?? s.t2_scores.chemistry;
+    const eng = s.english_pct ?? s.t2_scores.physics;
+    const sst = s.sst_pct ?? s.t1_scores.physics;
+    
+    const subjects = [sst, math, eng, sci];
+    let givenCount = subjects.filter(val => val !== undefined && val !== null).length;
+    if (givenCount === 0 && !isAbsent) {
+      givenCount = 4;
+    }
+    
+    const totalSubTxt = `${givenCount}/4`;
+    const attPctTxt = `${Math.round((givenCount / 4) * 100)}%`;
+
     const row = [
+      s.test_no || "Test 1",
+      region,
+      `"${combined_center.replace(/"/g, '""')}"`,
+      `"${s.center.replace(/"/g, '""')}"`,
       s.id,
       `"${s.name.replace(/"/g, '""')}"`,
-      s.t1_attendance,
-      s.t2_attendance
+      totalSubTxt,
+      attPctTxt
     ];
     lines.push(row.join(","));
   });
@@ -723,12 +713,15 @@ export function generateAttendanceCSVTemplateString(studentsList: Student[]): st
  * Generates formatted CSV for IOQM Achievement template
  */
 export function generateIoqmCSVTemplateString(studentsList: Student[]): string {
-  const headers = ["Student ID", "Student Name", "Center Name", "IOQM Score (%)"];
+  const headers = ["Student ID", "Student Name", "Region", "Combined Center", "Center Name", "IOQM Score (%)"];
   const lines = [headers.join(",")];
   studentsList.forEach(s => {
+    const { region, combined_center } = getRegionAndCombinedCenter(s);
     const row = [
       s.id,
       `"${s.name.replace(/"/g, '""')}"`,
+      region,
+      `"${combined_center.replace(/"/g, '""')}"`,
       `"${s.center.replace(/"/g, '""')}"`,
       s.ioqm_score
     ];
@@ -741,13 +734,16 @@ export function generateIoqmCSVTemplateString(studentsList: Student[]): string {
  * Generates formatted CSV for Ramp Up Test template
  */
 export function generateRampUpCSVTemplateString(studentsList: Student[]): string {
-  const headers = ["Student ID", "Student Name", "Grade (9 or 10)", "Center Name", "Ramp Up Score (%)"];
+  const headers = ["Student ID", "Student Name", "Grade (9 or 10)", "Region", "Combined Center", "Center Name", "Ramp Up Score (%)"];
   const lines = [headers.join(",")];
   studentsList.forEach(s => {
+    const { region, combined_center } = getRegionAndCombinedCenter(s);
     const row = [
       s.id,
       `"${s.name.replace(/"/g, '""')}"`,
       s.grade,
+      region,
+      `"${combined_center.replace(/"/g, '""')}"`,
       `"${s.center.replace(/"/g, '""')}"`,
       s.ramp_up_score !== undefined ? s.ramp_up_score : ""
     ];
@@ -762,15 +758,56 @@ export function generateRampUpCSVTemplateString(studentsList: Student[]): string
 export function downloadAttendanceXLSX(studentsList: Student[], fileName: string) {
   try {
     const wb = XLSX.utils.book_new();
-    const headers = ["Student ID", "Student Name", "Test 1 Attendance (Present/Absent)", "Test 2 Attendance (Present/Absent)"];
-    const rows = studentsList.map(s => [
-      s.id,
-      s.name,
-      s.t1_attendance,
-      s.t2_attendance
-    ]);
+    const headers = [
+      "TestNo.",
+      "region",
+      "combined_center",
+      "center",
+      "registration_number",
+      "name_of_students",
+      "total subject",
+      "test attendance"
+    ];
+    const rows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
+      const isAbsent = s.attendance?.toLowerCase().includes("abs") || (s.t1_attendance === "Absent" && s.t2_attendance === "Absent");
+      
+      const math = s.maths_pct ?? s.t2_scores.maths;
+      const sci = s.science_pct ?? s.t2_scores.chemistry;
+      const eng = s.english_pct ?? s.t2_scores.physics;
+      const sst = s.sst_pct ?? s.t1_scores.physics;
+      
+      const subjects = [sst, math, eng, sci];
+      let givenCount = subjects.filter(val => val !== undefined && val !== null).length;
+      if (givenCount === 0 && !isAbsent) {
+        givenCount = 4;
+      }
+      
+      const totalSubTxt = `${givenCount}/4`;
+      const attPctTxt = `${Math.round((givenCount / 4) * 100)}%`;
+
+      return [
+        s.test_no || "Test 1",
+        region,
+        combined_center,
+        s.center,
+        s.id,
+        s.name,
+        totalSubTxt,
+        attPctTxt
+      ];
+    });
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 25 }, { wch: 25 }];
+    ws["!cols"] = [
+      { wch: 12 }, // TestNo.
+      { wch: 15 }, // region
+      { wch: 20 }, // combined_center
+      { wch: 24 }, // center
+      { wch: 20 }, // registration_number
+      { wch: 22 }, // name_of_students
+      { wch: 15 }, // total subject
+      { wch: 15 }  // test attendance
+    ];
     XLSX.utils.book_append_sheet(wb, ws, "Attendance Ledger");
     XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
   } catch (err) {
@@ -784,15 +821,20 @@ export function downloadAttendanceXLSX(studentsList: Student[], fileName: string
 export function downloadIoqmXLSX(studentsList: Student[], fileName: string) {
   try {
     const wb = XLSX.utils.book_new();
-    const headers = ["Student ID", "Student Name", "Center Name", "IOQM Score (%)"];
-    const rows = studentsList.map(s => [
-      s.id,
-      s.name,
-      s.center,
-      s.ioqm_score
-    ]);
+    const headers = ["Student ID", "Student Name", "Region", "Combined Center", "Center Name", "IOQM Score (%)"];
+    const rows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
+      return [
+        s.id,
+        s.name,
+        region,
+        combined_center,
+        s.center,
+        s.ioqm_score
+      ];
+    });
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 24 }, { wch: 15 }];
+    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 15 }, { wch: 20 }, { wch: 24 }, { wch: 15 }];
     XLSX.utils.book_append_sheet(wb, ws, "IOQM Achievement");
     XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
   } catch (err) {
@@ -806,16 +848,21 @@ export function downloadIoqmXLSX(studentsList: Student[], fileName: string) {
 export function downloadRampUpXLSX(studentsList: Student[], fileName: string) {
   try {
     const wb = XLSX.utils.book_new();
-    const headers = ["Student ID", "Student Name", "Grade (9 or 10)", "Center Name", "Ramp Up Score (%)"];
-    const rows = studentsList.map(s => [
-      s.id,
-      s.name,
-      s.grade,
-      s.center,
-      s.ramp_up_score !== undefined ? s.ramp_up_score : ""
-    ]);
+    const headers = ["Student ID", "Student Name", "Grade (9 or 10)", "Region", "Combined Center", "Center Name", "Ramp Up Score (%)"];
+    const rows = studentsList.map(s => {
+      const { region, combined_center } = getRegionAndCombinedCenter(s);
+      return [
+        s.id,
+        s.name,
+        s.grade,
+        region,
+        combined_center,
+        s.center,
+        s.ramp_up_score !== undefined ? s.ramp_up_score : ""
+      ];
+    });
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 15 }, { wch: 24 }, { wch: 18 }];
+    ws["!cols"] = [{ wch: 15 }, { wch: 22 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 24 }, { wch: 18 }];
     XLSX.utils.book_append_sheet(wb, ws, "Ramp Up Scores");
     XLSX.writeFile(wb, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
   } catch (err) {

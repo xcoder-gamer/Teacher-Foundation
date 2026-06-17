@@ -11,6 +11,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // 2.5. Custom Students Chunks collection match block
+    match /students_chunks/{chunkId} {
+      allow read, write: if true;
+    }
+
     // 3. Custom Coaching collection match block
     match /coaching/{documentId} {
       allow read, write: if true;
