@@ -121,7 +121,7 @@ export default function App() {
   const [students, setStudents] = useState<Student[]>(PRELOADED_STUDENTS);
   const [selectedCenterName, setSelectedCenterName] = useState<string>("Lucknow Chowk Centre");
   const [leaderboardLevel, setLeaderboardLevel] = useState<"region" | "combined_center" | "center">("center");
-  const [selectedTab, setSelectedTab] = useState<string>("diagnostic");
+  const [selectedTab, setSelectedTab] = useState<string>("combined");
   const [leaderboardMetric, setLeaderboardMetric] = useState<"combined" | "subjective" | "ioqm" | "ramp_up" | "attendance" | "retention">("combined");
   const [benchmarkRefType, setBenchmarkRefType] = useState<"overall" | "metric_wise">("overall");
   
