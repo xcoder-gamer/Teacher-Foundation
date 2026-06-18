@@ -2111,11 +2111,14 @@ export default function App() {
                     </>
                   )}
                 </p>
+                <p className="text-[10px] text-yellow-500/80 font-mono mt-1.5 pt-1.5 border-t border-yellow-500/10 leading-normal break-all">
+                  <strong>Firebase response:</strong> {dbError.message}
+                </p>
               </div>
             </div>
             {dbError.isQuota && (
               <a
-                href="https://console.firebase.google.com/project/attendance-app-239fb/firestore/databases/ai-studio-e3886ee2-0cd5-417d-87a7-488d7f4d6948/data?openUpgradeDialog=true"
+                href="https://console.firebase.google.com/project/attendance-app-239fb/firestore/databases/(default)/data"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="bg-yellow-500 hover:bg-yellow-400 text-slate-950 px-3 py-1 rounded-lg text-[10px] font-mono font-bold transition flex items-center justify-center gap-1 shrink-0 active:scale-95 shadow-md hover:shadow-yellow-500/25"

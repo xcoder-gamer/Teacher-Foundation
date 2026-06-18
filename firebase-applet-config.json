@@ -3,7 +3,7 @@
   "appId": "1:521419247947:web:4c9e410ae816bfe5ddd8ce",
   "apiKey": "AIzaSyB_BGW7IgbU7Iy_oPCu1jEg7-HEQYIeijo",
   "authDomain": "attendance-app-239fb.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-e3886ee2-0cd5-417d-87a7-488d7f4d6948",
+  "firestoreDatabaseId": "(default)",
   "storageBucket": "attendance-app-239fb.firebasestorage.app",
   "messagingSenderId": "521419247947",
   "measurementId": ""
