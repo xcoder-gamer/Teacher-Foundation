@@ -38,17 +38,12 @@ export function isStudentPresentForTest(s: Student, testNum: 1 | 2): boolean {
 
 export function calculateTestAttendanceScore(centerStudents: Student[]) {
   const activeStudents = getActiveStudents(centerStudents);
-  const studentsWithAttendance = activeStudents.filter(s => 
-    s.t1_attendance === "Present" || 
-    s.t1_attendance === "Absent" || 
-    s.t2_attendance === "Present" || 
-    s.t2_attendance === "Absent"
-  );
+  const studentsWithAttendance = activeStudents.filter(s => s.t1_attendance !== undefined || s.t2_attendance !== undefined);
 
   if (studentsWithAttendance.length === 0) {
     return {
-      attendance_percent: null,
-      testAttendanceScore: null
+      attendance_percent: 0,
+      testAttendanceScore: 0
     };
   }
 

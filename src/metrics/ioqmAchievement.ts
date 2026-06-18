@@ -3,12 +3,12 @@ import { getActiveStudents } from "./shared";
 
 export function calculateIoqmScore(centerStudents: Student[]) {
   const activeStudents = getActiveStudents(centerStudents);
-  const studentsWithIoqm = activeStudents.filter(s => s.ioqm_score !== undefined && s.ioqm_score !== null);
+  const studentsWithIoqm = activeStudents.filter(s => s.ioqm_score !== undefined);
 
   if (studentsWithIoqm.length === 0) {
     return {
-      ioqm_percent: null,
-      ioqmScore: null
+      ioqm_percent: 0,
+      ioqmScore: 0
     };
   }
 

@@ -313,6 +313,11 @@ export function parseSpreadsheetRowsToStudents(
                    testNameLower.includes("half") || 
                    (testNameLower.includes("2") && !testNameLower.includes("term 1") && !testNameLower.includes("term i"));
 
+      // Attendance check
+      const attStr = getCellValue(row, colIndex.attendance).toLowerCase();
+      const isAbsent = attStr.includes("absent") || attStr.includes("rescheduled") || attStr.includes("no test");
+      const attendanceStatus = isAbsent ? "Absent" : "Present";
+
       // Percentage and absolute metrics extraction
       const mathsScore = parsePercent(getCellValue(row, colIndex.maths_pct));
       const scienceScore = parsePercent(getCellValue(row, colIndex.science_pct));
@@ -326,16 +331,6 @@ export function parseSpreadsheetRowsToStudents(
       const chemistryVal = hasAnyScore ? (scienceScore ?? urduScore ?? sstScore ?? 75) : undefined;
       const mathsVal = hasAnyScore ? (mathsScore ?? scienceScore ?? 75) : undefined;
 
-      // Attendance check
-      let attendanceStatus: "Present" | "Absent" | undefined = undefined;
-      if (colIndex.attendance >= 0) {
-        const attStr = getCellValue(row, colIndex.attendance).toLowerCase();
-        const isAbsent = attStr.includes("absent") || attStr.includes("rescheduled") || attStr.includes("no test");
-        attendanceStatus = isAbsent ? "Absent" : "Present";
-      } else {
-        attendanceStatus = hasAnyScore ? "Present" : undefined;
-      }
-
       const key = id.toLowerCase();
       if (!mergedMap.has(key)) {
         mergedMap.set(key, {
@@ -343,8 +338,8 @@ export function parseSpreadsheetRowsToStudents(
           name,
           grade,
           center,
-          t1_attendance: undefined,
-          t2_attendance: undefined,
+          t1_attendance: "Absent",
+          t2_attendance: "Absent",
           t1_scores: {},
           t2_scores: {},
           retained: true
@@ -366,7 +361,7 @@ export function parseSpreadsheetRowsToStudents(
       stud.test_date = getCellValue(row, colIndex.test_date) || "25 May, 2026";
       stud.test_name = testName;
       stud.test_no = colIndex.test_no >= 0 ? getCellValue(row, colIndex.test_no) : "Test 1";
-      stud.attendance = getCellValue(row, colIndex.attendance) || (attendanceStatus === "Present" ? "Present" : (attendanceStatus === "Absent" ? "Absent" : ""));
+      stud.attendance = getCellValue(row, colIndex.attendance) || (attendanceStatus === "Present" ? "Present" : "Absent");
       stud.sst_pct = sstScore ?? physicsVal;
       stud.urdu_pct = urduScore ?? chemistryVal;
       stud.maths_pct = mathsScore ?? mathsVal;
@@ -388,9 +383,7 @@ export function parseSpreadsheetRowsToStudents(
       stud.test_count = testCount;
 
       if (testCount === 1) {
-        if (attendanceStatus !== undefined) {
-          stud.t1_attendance = attendanceStatus;
-        }
+        stud.t1_attendance = attendanceStatus;
         stud.t2_attendance = "Absent";
         if (attendanceStatus === "Present") {
           stud.t1_scores = {};
@@ -398,33 +391,29 @@ export function parseSpreadsheetRowsToStudents(
           if (chemistryVal !== undefined) stud.t1_scores.chemistry = chemistryVal;
           if (mathsVal !== undefined) stud.t1_scores.maths = mathsVal;
           stud.t2_scores = {};
-        } else if (attendanceStatus === "Absent") {
+        } else {
           stud.t1_scores = {};
           stud.t2_scores = {};
         }
       } else {
         if (isT2) {
-          if (attendanceStatus !== undefined) {
-            stud.t2_attendance = attendanceStatus;
-          }
+          stud.t2_attendance = attendanceStatus;
           if (attendanceStatus === "Present") {
             stud.t2_scores = {};
             if (physicsVal !== undefined) stud.t2_scores.physics = physicsVal;
             if (chemistryVal !== undefined) stud.t2_scores.chemistry = chemistryVal;
             if (mathsVal !== undefined) stud.t2_scores.maths = mathsVal;
-          } else if (attendanceStatus === "Absent") {
+          } else {
             stud.t2_scores = {};
           }
         } else {
-          if (attendanceStatus !== undefined) {
-            stud.t1_attendance = attendanceStatus;
-          }
+          stud.t1_attendance = attendanceStatus;
           if (attendanceStatus === "Present") {
             stud.t1_scores = {};
             if (physicsVal !== undefined) stud.t1_scores.physics = physicsVal;
             if (chemistryVal !== undefined) stud.t1_scores.chemistry = chemistryVal;
             if (mathsVal !== undefined) stud.t1_scores.maths = mathsVal;
-          } else if (attendanceStatus === "Absent") {
+          } else {
             stud.t1_scores = {};
           }
         }
@@ -550,8 +539,8 @@ export function parseSpreadsheetRowsToStudents(
           center,
           t1_scores: {},
           t2_scores: {},
-          ioqm_score: ioqmVal,
-          retained: undefined
+          ioqm_score: ioqmVal ?? 0,
+          retained: true
         });
       }
     }
@@ -591,7 +580,7 @@ export function parseSpreadsheetRowsToStudents(
           t1_scores: {},
           t2_scores: {},
           ramp_up_score: rampUpVal,
-          retained: undefined
+          retained: true
         });
       }
     }
@@ -609,12 +598,8 @@ export function parseSpreadsheetRowsToStudents(
     const name = getCellValue(row, colIndex.name) || `Student ${i}`;
     const grade = parseGrade(getCellValue(row, colIndex.grade));
     const center = getCellValue(row, colIndex.center) || "Imported Center";
-    const t1_attendance = colIndex.t1_attendance >= 0 
-      ? parseAttendance(getCellValue(row, colIndex.t1_attendance)) 
-      : undefined;
-    const t2_attendance = colIndex.t2_attendance >= 0 
-      ? parseAttendance(getCellValue(row, colIndex.t2_attendance)) 
-      : undefined;
+    const t1_attendance = parseAttendance(getCellValue(row, colIndex.t1_attendance));
+    const t2_attendance = parseAttendance(getCellValue(row, colIndex.t2_attendance));
 
     const t1_scores: SubjectScores = {};
     if (t1_attendance === "Present") {
@@ -636,12 +621,9 @@ export function parseSpreadsheetRowsToStudents(
       if (m !== undefined) t2_scores.maths = m;
     }
 
-    const hasIoqmCol = colIndex.ioqm_score >= 0;
-    const ioqm_score = hasIoqmCol ? parsePercent(getCellValue(row, colIndex.ioqm_score)) : undefined;
-    const hasRampUpCol = colIndex.ramp_up_score >= 0;
-    const ramp_up_score = hasRampUpCol ? parsePercent(getCellValue(row, colIndex.ramp_up_score)) : undefined;
-    const hasRetentionCol = colIndex.retained >= 0 || colIndex.defaulter_status >= 0 || colIndex.inactive >= 0 || colIndex.admission_cancellation >= 0;
-    const retained = hasRetentionCol ? parseRetained(getCellValue(row, colIndex.retained)) : undefined;
+    const ioqm_score = parsePercent(getCellValue(row, colIndex.ioqm_score)) ?? 0;
+    const ramp_up_score = parsePercent(getCellValue(row, colIndex.ramp_up_score));
+    const retained = parseRetained(getCellValue(row, colIndex.retained));
 
     // Detect test count based on total_marks and subject_total_marks
     const totalMarksVal = colIndex.total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.total_marks)) : undefined;

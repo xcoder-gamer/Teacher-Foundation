@@ -58,23 +58,23 @@ export interface CenterScores {
   combined_center?: string;
   
   // Component scores (out of 100)
-  subjectiveTestScore: number | null;
-  elementA_percent: number | null;
-  elementA_score: number | null;
-  elementB_percent: number | null;
-  elementB_score: number | null;
+  subjectiveTestScore: number;
+  elementA_percent: number;
+  elementA_score: number;
+  elementB_percent: number;
+  elementB_score: number;
   
-  testAttendanceScore: number | null;
-  attendance_percent: number | null;
+  testAttendanceScore: number;
+  attendance_percent: number;
   
-  ioqmScore: number | null;
-  ioqm_percent: number | null;
+  ioqmScore: number;
+  ioqm_percent: number;
   
-  rampUpScore: number | null;
-  rampUp_percent: number | null;
+  rampUpScore: number;
+  rampUp_percent: number;
   
-  studentRetentionScore: number | null;
-  retention_percent: number | null;
+  studentRetentionScore: number;
+  retention_percent: number;
   
   // Final composite (out of 100)
   consolidatedScore: number;

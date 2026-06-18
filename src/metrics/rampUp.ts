@@ -5,12 +5,12 @@ export function calculateRampUpScore(centerStudents: Student[]) {
   const activeStudents = getActiveStudents(centerStudents);
 
   // % of 9th/10th graders in active student pool with a defined ramp_up_score > 80%
-  const activeRampStudents = activeStudents.filter(s => (s.grade === "9" || s.grade === "10") && s.ramp_up_score !== undefined && s.ramp_up_score !== null);
+  const activeRampStudents = activeStudents.filter(s => (s.grade === "9" || s.grade === "10") && s.ramp_up_score !== undefined);
   
   if (activeRampStudents.length === 0) {
     return {
-      rampUp_percent: null,
-      rampUpScore: null
+      rampUp_percent: 0,
+      rampUpScore: 0
     };
   }
 
