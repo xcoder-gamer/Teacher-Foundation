@@ -2,7 +2,7 @@ import { Student } from "../types";
 import { getStudentPerformance, getActiveStudents } from "./shared";
 
 export function calculateSubjectiveTestScore(centerStudents: Student[]) {
-  const activeStudents = getActiveStudents(centerStudents);
+  const activeStudents = getActiveStudents(centerStudents).filter(s => s.t1_attendance !== undefined || s.t2_attendance !== undefined);
 
   if (activeStudents.length === 0) {
     return {

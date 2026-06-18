@@ -530,28 +530,6 @@ export function parseSpreadsheetRowsToStudents(
         const finalT1 = !isT2 ? (finalStatus ?? t1Att ?? "Present") : (t1Att ?? "Present");
         const finalT2 = isT2 ? (finalStatus ?? t2Att ?? "Present") : (t2Att ?? "Present");
 
-        // Compute deterministic but realistic score metrics based on unique ID hash
-        let hash = 0;
-        for (let idx = 0; idx < id.length; idx++) {
-          hash = id.charCodeAt(idx) + ((hash << 5) - hash);
-        }
-        const scoreSeed1 = Math.abs(hash % 45) + 50; // 50 to 95
-        const scoreSeed2 = Math.abs((hash >> 2) % 45) + 50;
-        const scoreSeed3 = Math.abs((hash >> 4) % 45) + 50;
-        const ioqmSeed = Math.abs((hash >> 6) % 35) + 20;
-
-        const defaultT1scores = finalT1 === "Present" ? {
-          physics: scoreSeed1,
-          chemistry: scoreSeed2,
-          maths: scoreSeed3
-        } : {};
-
-        const defaultT2scores = finalT2 === "Present" ? {
-          physics: Math.min(100, Math.max(30, scoreSeed1 + (hash % 10 - 5))),
-          chemistry: Math.min(100, Math.max(30, scoreSeed2 + (hash % 12 - 6))),
-          maths: Math.min(100, Math.max(30, scoreSeed3 + (hash % 8 - 4)))
-        } : {};
-
         mergedMap.set(key, {
           id,
           name,
@@ -559,10 +537,8 @@ export function parseSpreadsheetRowsToStudents(
           center,
           t1_attendance: finalT1,
           t2_attendance: finalT2,
-          t1_scores: defaultT1scores,
-          t2_scores: defaultT2scores,
-          ioqm_score: ioqmSeed,
-          ramp_up_score: scoreSeed1,
+          t1_scores: {},
+          t2_scores: {},
           retained: true,
           region: finalReg,
           combined_center: finalCombCenter,
@@ -687,7 +663,7 @@ export function parseSpreadsheetRowsToStudents(
       if (m !== undefined) t2_scores.maths = m;
     }
 
-    const ioqm_score = parsePercent(getCellValue(row, colIndex.ioqm_score)) ?? 0;
+    const ioqm_score = parsePercent(getCellValue(row, colIndex.ioqm_score));
     const ramp_up_score = parsePercent(getCellValue(row, colIndex.ramp_up_score));
     const retained = parseRetained(getCellValue(row, colIndex.retained));
 
