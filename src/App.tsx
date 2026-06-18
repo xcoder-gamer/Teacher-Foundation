@@ -300,11 +300,27 @@ export default function App() {
           }
         }
 
+        // Check custom state initialization status
+        let dbHasImportedData = false;
+        try {
+          const metaStatus = await getDoc(doc(db, "meta", "status"));
+          if (metaStatus.exists()) {
+            dbHasImportedData = metaStatus.data().hasImportedData ?? false;
+          }
+        } catch (metaErr) {
+          console.warn("Could not read meta status, falling back to parsed lengths check", metaErr);
+        }
+
         let loadedCenter = "Lucknow Chowk Centre";
         if (parsed.length > 0) {
           setStudents(parsed);
           setHasImportedData(true);
           loadedCenter = parsed[0].center || "All Centers Combined";
+        } else if (dbHasImportedData) {
+          // Intentionally blank slate/wiped database state
+          setStudents([]);
+          setHasImportedData(true);
+          loadedCenter = "All Centers Combined";
         }
 
         // 2. Fetch Active Coaching/Simulation State from Firestore
@@ -1429,6 +1445,12 @@ export default function App() {
       if (count > 0) {
         await batch.commit();
       }
+      
+      await setDoc(doc(db, "meta", "status"), {
+        hasImportedData: true,
+        updatedAt: new Date().toISOString()
+      });
+
       alert("🧹 Clean slate initialized! Database cleared. You can now upload your custom live spreadsheets.");
     } catch (writeErr) {
       handleFirestoreError(writeErr, OperationType.DELETE, "students_chunks");
@@ -1585,21 +1607,9 @@ export default function App() {
         });
         await chunkBatch.commit();
 
-        const qSnap = await getDocs(collection(db, "students"));
-        let legacyBatch = writeBatch(db);
-        let delCount = 0;
-        for (const docSnap of qSnap.docs) {
-          legacyBatch.delete(docSnap.ref);
-          delCount++;
-          if (delCount >= 400) {
-            await legacyBatch.commit();
-            legacyBatch = writeBatch(db);
-            delCount = 0;
-          }
-        }
-        if (delCount > 0) {
-          await legacyBatch.commit();
-        }
+        // Note: We skip the massive, slow sequential legacy singular student deletions during standard imports.
+        // Wiping the high-perf chunks is sufficient and near-instant (typically under 2 seconds total).
+        // A full database reset can still be executed via the dedicated 'Wipe All Data' admin button if needed.
         
         // Step 2: Clean and chunk data for Firestore to bypass any batch size/network payload limits
         const cleanDataForFirestore = (obj: any): any => {
@@ -1633,6 +1643,10 @@ export default function App() {
             updatedAt: new Date().toISOString()
           });
         }
+        await setDoc(doc(db, "meta", "status"), {
+          hasImportedData: true,
+          updatedAt: new Date().toISOString()
+        });
       } catch (writeErr) {
         handleFirestoreError(writeErr, OperationType.WRITE, "students_chunks");
       }
