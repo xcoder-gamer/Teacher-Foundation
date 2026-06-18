@@ -1,5 +1,4 @@
 import { Student } from "../types";
-import { getActiveStudents } from "./shared";
 
 /**
  * Checks if a student is present or took any subject test (max 4 subjects count as 1 presence)
@@ -37,8 +36,8 @@ export function isStudentPresentForTest(s: Student, testNum: 1 | 2): boolean {
 }
 
 export function calculateTestAttendanceScore(centerStudents: Student[]) {
-  const activeStudents = getActiveStudents(centerStudents);
-  const studentsWithAttendance = activeStudents.filter(s => s.t1_attendance !== undefined || s.t2_attendance !== undefined);
+  // Use all center students (including double absentees) to reflect the real attendance rate
+  const studentsWithAttendance = centerStudents.filter(s => s.t1_attendance !== undefined || s.t2_attendance !== undefined);
 
   if (studentsWithAttendance.length === 0) {
     return {

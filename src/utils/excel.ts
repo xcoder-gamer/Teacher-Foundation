@@ -22,7 +22,7 @@ export function getRegionAndCombinedCenter(s: any): { region: string; combined_c
     } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
       region = "Karnataka";
     } else {
-      region = "Uttar Pradesh";
+      region = "General";
     }
   }
 

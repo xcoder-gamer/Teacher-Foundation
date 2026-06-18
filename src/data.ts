@@ -743,8 +743,8 @@ export function calculateCenterMetrics(
   const activeStudents = getActiveStudents(centerStudents);
 
   // Compute region and combined_center dynamically
-  let region = "Uttar Pradesh";
-  let combined_center = "Lucknow Combined";
+  let region = "General";
+  let combined_center = centerName + " Combined";
 
   if (centerName === "All Centers Combined") {
     region = "All Regions";
@@ -768,7 +768,7 @@ export function calculateCenterMetrics(
       } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
         region = "Karnataka";
       } else {
-        region = "Uttar Pradesh";
+        region = "General";
       }
     }
 
@@ -872,7 +872,7 @@ export function getStudentRegionAndCombinedCenter(s: Student): { region: string;
     } else if (cn.includes("bangalore") || cn.includes("bng") || cn.includes("karnataka")) {
       region = "Karnataka";
     } else {
-      region = "Uttar Pradesh";
+      region = "General";
     }
   }
 

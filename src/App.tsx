@@ -300,9 +300,11 @@ export default function App() {
           }
         }
 
+        let loadedCenter = "Lucknow Chowk Centre";
         if (parsed.length > 0) {
           setStudents(parsed);
           setHasImportedData(true);
+          loadedCenter = parsed[0].center || "All Centers Combined";
         }
 
         // 2. Fetch Active Coaching/Simulation State from Firestore
@@ -321,7 +323,11 @@ export default function App() {
           }
           if (coachingData.selectedCenterName) {
             setSelectedCenterName(coachingData.selectedCenterName);
+          } else if (parsed.length > 0) {
+            setSelectedCenterName(loadedCenter);
           }
+        } else if (parsed.length > 0) {
+          setSelectedCenterName(loadedCenter);
         }
       } catch (e) {
         console.error("Firestore initial data load error", e);
@@ -367,17 +373,17 @@ export default function App() {
   const simulatedStudents = useMemo(() => {
     return students.map((s) => {
       if (coachedStudentIds.includes(s.id)) {
-        // Build simulated student with all failing papers boosted to 45% (pass line)
+        // Build simulated student with all failing papers boosted to 40% (pass line)
         const updatedT1 = { ...s.t1_scores };
         const updatedT2 = { ...s.t2_scores };
 
-        if (updatedT1.physics !== undefined && updatedT1.physics < 40) updatedT1.physics = 45;
-        if (updatedT1.chemistry !== undefined && updatedT1.chemistry < 40) updatedT1.chemistry = 45;
-        if (updatedT1.maths !== undefined && updatedT1.maths < 40) updatedT1.maths = 45;
+        if (updatedT1.physics !== undefined && updatedT1.physics < 40) updatedT1.physics = 40;
+        if (updatedT1.chemistry !== undefined && updatedT1.chemistry < 40) updatedT1.chemistry = 40;
+        if (updatedT1.maths !== undefined && updatedT1.maths < 40) updatedT1.maths = 40;
 
-        if (updatedT2.physics !== undefined && updatedT2.physics < 40) updatedT2.physics = 45;
-        if (updatedT2.chemistry !== undefined && updatedT2.chemistry < 40) updatedT2.chemistry = 45;
-        if (updatedT2.maths !== undefined && updatedT2.maths < 40) updatedT2.maths = 45;
+        if (updatedT2.physics !== undefined && updatedT2.physics < 40) updatedT2.physics = 40;
+        if (updatedT2.chemistry !== undefined && updatedT2.chemistry < 40) updatedT2.chemistry = 40;
+        if (updatedT2.maths !== undefined && updatedT2.maths < 40) updatedT2.maths = 40;
 
         // Boost Olympiad IOQM scores to 90%
         const simulatedIoqm = s.ioqm_score !== undefined ? (s.ioqm_score < 90 ? 90 : s.ioqm_score) : undefined;
@@ -893,11 +899,11 @@ export default function App() {
         valA = a.centerName;
         valB = b.centerName;
       } else if (centerSortField === "region") {
-        valA = a.region || "Uttar Pradesh";
-        valB = b.region || "Uttar Pradesh";
+        valA = a.region || "General";
+        valB = b.region || "General";
       } else if (centerSortField === "combined_center") {
-        valA = a.combined_center || "Lucknow Combined";
-        valB = b.combined_center || "Lucknow Combined";
+        valA = a.combined_center || "General Combined";
+        valB = b.combined_center || "General Combined";
       } else if (centerSortField === "consolidatedScore") {
         valA = a.consolidatedScore;
         valB = b.consolidatedScore;
@@ -988,7 +994,7 @@ export default function App() {
         const perf = getStudentPerformance(s);
         perf.papers.forEach((p) => {
           if (p.score !== undefined && p.score < 40) {
-            const simulated = isCoached(s.id) ? 45 : p.score;
+            const simulated = isCoached(s.id) ? 40 : p.score;
             items.push({
               student: s,
               originalPaper: `${p.test} ${p.name}`,
@@ -1550,13 +1556,21 @@ export default function App() {
         throw new Error("The selected file is empty or missing headers.");
       }
 
-      const parsedStudents = parseSpreadsheetRowsToStudents(rows, students, selectedUploadMatrix);
+      const parsedStudents = parseSpreadsheetRowsToStudents(
+        rows,
+        hasImportedData ? students : [],
+        selectedUploadMatrix
+      );
       if (parsedStudents.length === 0) {
         throw new Error("Could not extract any valid student records. Check column header spellings.");
       }
 
       setStudents(parsedStudents);
       setHasImportedData(true);
+      if (parsedStudents.length > 0) {
+        const firstCenter = parsedStudents[0].center || "All Centers Combined";
+        setSelectedCenterName(firstCenter);
+      }
       setCoachedStudentIds([]);
       setAiReport("");
       setAiError("");
@@ -1837,6 +1851,85 @@ export default function App() {
             <span className="text-[9px] text-slate-500 font-mono block mt-0.5">Toggle student card checkmarks below</span>
           </div>
         </div>
+
+        {/* Dynamic Target Pupils Status Summary Checklist */}
+        {(() => {
+          let tabTargetStudents: Student[] = [];
+          if (metricTab === "subjective") {
+            tabTargetStudents = currentCenterBorderlineStudents;
+          } else if (metricTab === "ioqm") {
+            tabTargetStudents = actionablePlan.ioqmItems.map(item => item.student);
+          } else if (metricTab === "ramp_up") {
+            tabTargetStudents = actionablePlan.rampUpItems.map(item => item.student);
+          } else if (metricTab === "attendance") {
+            const seenIds = new Set<string>();
+            tabTargetStudents = [];
+            actionablePlan.absentees.forEach(item => {
+              if (!seenIds.has(item.student.id)) {
+                seenIds.add(item.student.id);
+                tabTargetStudents.push(item.student);
+              }
+            });
+          } else if (metricTab === "retention") {
+            tabTargetStudents = actionablePlan.retentionItems.map(item => item.student);
+          }
+
+          const coachedForTab = tabTargetStudents.filter(s => coachedStudentIds.includes(s.id));
+          const pendingForTab = tabTargetStudents.filter(s => !coachedStudentIds.includes(s.id));
+
+          if (tabTargetStudents.length === 0) return null;
+
+          return (
+            <div className="mt-4 border-t border-slate-800/80 pt-3 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <span className="text-[10px] text-slate-400 font-mono block uppercase tracking-wider font-semibold">
+                  📋 TARGET STUDENTS INTERVENTION STATUS (CHECKLIST)
+                </span>
+                <span className="text-[9px] text-slate-500 font-mono">
+                  Toggle student checkboxes below to apply active support
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs mt-1.5">
+                <div className="bg-slate-900/40 p-2.5 rounded-lg border border-emerald-500/10">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-400 mb-1.5 font-mono text-[10px] uppercase">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Support Active / Worked On ({coachedForTab.length})</span>
+                  </div>
+                  {coachedForTab.length === 0 ? (
+                    <span className="text-slate-500 text-[10.5px] italic block">No student selected yet. Check cards below.</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {coachedForTab.map(s => (
+                        <span key={s.id} className="bg-emerald-500/10 text-emerald-300 font-medium px-2 py-0.5 rounded text-[10px] border border-emerald-500/20 font-mono">
+                          {s.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                <div className="bg-slate-900/40 p-2.5 rounded-lg border border-rose-500/10">
+                  <div className="flex items-center gap-1.5 font-bold text-rose-400 mb-1.5 font-mono text-[10px] uppercase">
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                    <span>Pending Intervention / Needs Work ({pendingForTab.length})</span>
+                  </div>
+                  {pendingForTab.length === 0 ? (
+                    <span className="text-emerald-400 text-[10.5px] font-medium block">🎯 Perfect! All target students are covered under active support.</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {pendingForTab.map(s => (
+                        <span key={s.id} className="bg-rose-500/10 text-rose-300 font-medium px-2 py-0.5 rounded text-[10px] border border-rose-500/20 font-mono">
+                          {s.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -2693,7 +2786,9 @@ export default function App() {
                   <button
                     onClick={() => {
                       setLeaderboardLevel("region");
-                      setSelectedCenterName("Uttar Pradesh");
+                      const list = getRankedMetricGroups(simulatedStudents, "region");
+                      const topItem = list[0]?.centerName || "General";
+                      setSelectedCenterName(topItem);
                     }}
                     className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
                       leaderboardLevel === "region"
@@ -2706,7 +2801,9 @@ export default function App() {
                   <button
                     onClick={() => {
                       setLeaderboardLevel("combined_center");
-                      setSelectedCenterName("Lucknow Combined");
+                      const list = getRankedMetricGroups(simulatedStudents, "combined_center");
+                      const topItem = list[0]?.centerName || "General Combined";
+                      setSelectedCenterName(topItem);
                     }}
                     className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
                       leaderboardLevel === "combined_center"
@@ -2719,7 +2816,9 @@ export default function App() {
                   <button
                     onClick={() => {
                       setLeaderboardLevel("center");
-                      setSelectedCenterName("Lucknow Chowk Centre");
+                      const list = getRankedMetricGroups(simulatedStudents, "center");
+                      const topItem = list[0]?.centerName || "No Active Centers";
+                      setSelectedCenterName(topItem);
                     }}
                     className={`px-3.5 py-1.5 rounded-md font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
                       leaderboardLevel === "center"
@@ -3068,12 +3167,12 @@ export default function App() {
                           </td>
                           {leaderboardLevel !== "region" && (
                             <td className="p-3 text-left font-semibold text-emerald-400 font-mono">
-                              {item.region || "Uttar Pradesh"}
+                              {item.region || "General"}
                             </td>
                           )}
                           {leaderboardLevel === "center" && (
                             <td className="p-3 text-left font-semibold text-cyan-400">
-                              {item.combined_center || "Lucknow Combined"}
+                              {item.combined_center || "General Combined"}
                             </td>
                           )}
                           <td className="p-3 font-mono font-bold text-center bg-yellow-500/10 text-yellow-405 text-xs shadow-inner">
@@ -3913,7 +4012,7 @@ export default function App() {
                       </span>
                       <strong>⚡ Target Tier 1 (Coach 6 Borderline Pupils)</strong>
                       <span className="block text-slate-400 mt-1.5 font-normal text-[11px]">
-                        Boost exactly 6 Lucknow borderline students from 30-39% up to 45% pass. Reduces Element B rates, jumping national ranks.
+                        Boost exactly 6 Lucknow borderline students from 30-39% up to 40% pass. Reduces Element B rates, jumping national ranks.
                       </span>
                     </button>
 
@@ -3997,9 +4096,16 @@ export default function App() {
                           <div className="flex-1">
                             <div className="flex justify-between items-center">
                               <span className="font-semibold text-sm text-slate-100">{student.name}</span>
-                              <span className="text-[10px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">
-                                {student.id}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                {isCoached ? (
+                                  <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">SUPPORT ACTIVE</span>
+                                ) : (
+                                  <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">NEEDS WORK</span>
+                                )}
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">
+                                  {student.id}
+                                </span>
+                              </div>
                             </div>
                             <div className="flex items-center gap-2 mt-1 text-[11px]">
                               <span className="text-slate-400">failing:</span>
@@ -4008,7 +4114,7 @@ export default function App() {
                               </span>
                               <span className="text-slate-600">|</span>
                               <span className="text-cyan-450 font-medium text-[10px] text-cyan-400">
-                                Predicted Pass: 45% (Needs +{gap}%)
+                                Predicted Pass: 40% (Needs +{gap}%)
                               </span>
                             </div>
                           </div>
@@ -4157,9 +4263,16 @@ export default function App() {
                               {isCoached ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-600 hover:text-slate-500" />}
                             </div>
                             <div className="flex-1">
-                              <div className="flex justify-between items-center text-xs">
+                               <div className="flex justify-between items-center text-xs">
                                 <span className="font-semibold text-slate-100">{student.name}</span>
-                                <span className="text-[10px] font-mono text-slate-500 font-bold">{student.id}</span>
+                                <div className="flex items-center gap-1.5">
+                                  {isCoached ? (
+                                    <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">SUPPORT ACTIVE</span>
+                                  ) : (
+                                    <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">NEEDS WORK</span>
+                                  )}
+                                  <span className="text-[10px] font-mono text-slate-500 font-bold">{student.id}</span>
+                                </div>
                               </div>
                               <div className="text-[11px] text-slate-400 mt-1">
                                 Current Score: <span className="text-rose-400 font-bold font-mono">{currentScore}%</span>
@@ -4309,7 +4422,14 @@ export default function App() {
                             <div className="flex-1">
                               <div className="flex justify-between items-center text-xs">
                                 <span className="font-semibold text-slate-100">{student.name}</span>
-                                <span className="text-[10px] font-mono text-slate-400 bg-slate-900 px-1 py-0.5 rounded">Grade {student.grade} | {student.id}</span>
+                                <div className="flex items-center gap-1.5">
+                                  {isCoached ? (
+                                    <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">SUPPORT ACTIVE</span>
+                                  ) : (
+                                    <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">NEEDS WORK</span>
+                                  )}
+                                  <span className="text-[10px] font-mono text-slate-400 bg-slate-900 px-1 py-0.5 rounded">Grade {student.grade} | {student.id}</span>
+                                </div>
                               </div>
                               <div className="text-[11px] text-slate-400 mt-1">
                                 Current Score: <span className="text-rose-455 text-rose-400 font-bold font-mono">{currentScore}%</span>
@@ -4481,7 +4601,14 @@ export default function App() {
                               <div className="flex-1">
                                 <div className="flex justify-between items-center text-xs">
                                   <span className={`font-semibold ${isCoached ? "text-emerald-400 font-bold" : "text-slate-100"}`}>{student.name}</span>
-                                  <span className="text-[10px] font-mono text-slate-500 font-bold">{student.id}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    {isCoached ? (
+                                      <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">SUPPORT ACTIVE</span>
+                                    ) : (
+                                      <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">ABSENT - CONTACT</span>
+                                    )}
+                                    <span className="text-[10px] font-mono text-slate-500 font-bold">{student.id}</span>
+                                  </div>
                                 </div>
                                 <div className="text-[11px] text-slate-400 mt-1 font-sans">
                                   Current Attendance Code: <span className="text-rose-400 font-bold">{type}</span>
@@ -4943,12 +5070,12 @@ export default function App() {
                           if (isCoached) {
                             const updatedT1 = { ...student.t1_scores };
                             const updatedT2 = { ...student.t2_scores };
-                            if (updatedT1.physics !== undefined && updatedT1.physics < 40) updatedT1.physics = 45;
-                            if (updatedT1.chemistry !== undefined && updatedT1.chemistry < 40) updatedT1.chemistry = 45;
-                            if (updatedT1.maths !== undefined && updatedT1.maths < 40) updatedT1.maths = 45;
-                            if (updatedT2.physics !== undefined && updatedT2.physics < 40) updatedT2.physics = 45;
-                            if (updatedT2.chemistry !== undefined && updatedT2.chemistry < 40) updatedT2.chemistry = 45;
-                            if (updatedT2.maths !== undefined && updatedT2.maths < 40) updatedT2.maths = 45;
+                            if (updatedT1.physics !== undefined && updatedT1.physics < 40) updatedT1.physics = 40;
+                            if (updatedT1.chemistry !== undefined && updatedT1.chemistry < 40) updatedT1.chemistry = 40;
+                            if (updatedT1.maths !== undefined && updatedT1.maths < 40) updatedT1.maths = 40;
+                            if (updatedT2.physics !== undefined && updatedT2.physics < 40) updatedT2.physics = 40;
+                            if (updatedT2.chemistry !== undefined && updatedT2.chemistry < 40) updatedT2.chemistry = 40;
+                            if (updatedT2.maths !== undefined && updatedT2.maths < 40) updatedT2.maths = 40;
                             
                             const papers: number[] = [];
                             if (isT1Present) {
