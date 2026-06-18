@@ -373,10 +373,15 @@ export function parseSpreadsheetRowsToStudents(
       stud.english_pct = englishScore ?? scienceScore ?? (hasAnyScore ? 75 : undefined);
       stud.science_pct = scienceScore ?? physicsVal;
 
-      // Detect test count based on total_marks and subject_total_marks
+      // Detect test count based on total_marks, subject_total_marks, or availability of T2 columns
+      const hasT2ColumnsPr = colIndex.t2_attendance >= 0 || 
+                             colIndex.t2_physics >= 0 || 
+                             colIndex.t2_chemistry >= 0 || 
+                             colIndex.t2_maths >= 0;
+      let testCount = (hasT2ColumnsPr || isT2) ? 2 : 1;
+
       const totalMarksVal = colIndex.total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.total_marks)) : undefined;
       const subjTotalMarksVal = colIndex.subject_total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.subject_total_marks)) : undefined;
-      let testCount = 2; // Default to 2
       if (totalMarksVal !== undefined && subjTotalMarksVal !== undefined && totalMarksVal > 0) {
         if (Math.abs(totalMarksVal - subjTotalMarksVal) < 0.1) {
           testCount = 1;
@@ -508,6 +513,9 @@ export function parseSpreadsheetRowsToStudents(
         }
       }
 
+      const hasT2Column = colIndex.t2_attendance >= 0;
+      const isSingleTest = !hasT2Column && !isT2;
+
       if (mergedMap.has(key)) {
         const stud = mergedMap.get(key)!;
         if (name && name !== `Student ${i}`) stud.name = name;
@@ -526,9 +534,10 @@ export function parseSpreadsheetRowsToStudents(
             stud.t1_attendance = finalStatus;
           }
         }
+        stud.test_count = isSingleTest ? 1 : 2;
       } else {
         const finalT1 = !isT2 ? (finalStatus ?? t1Att ?? "Present") : (t1Att ?? "Present");
-        const finalT2 = isT2 ? (finalStatus ?? t2Att ?? "Present") : (t2Att ?? "Present");
+        const finalT2 = isSingleTest ? undefined : (isT2 ? (finalStatus ?? t2Att ?? "Present") : (t2Att ?? "Present"));
 
         mergedMap.set(key, {
           id,
@@ -542,7 +551,8 @@ export function parseSpreadsheetRowsToStudents(
           retained: true,
           region: finalReg,
           combined_center: finalCombCenter,
-          batch: batValue || "11-NF101EA"
+          batch: batValue || "11-NF101EA",
+          test_count: isSingleTest ? 1 : 2
         });
       }
     }

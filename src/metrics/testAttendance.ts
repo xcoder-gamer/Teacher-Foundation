@@ -46,11 +46,14 @@ export function calculateTestAttendanceScore(centerStudents: Student[]) {
     };
   }
 
+  // Check if there is ANY student in the cohort that has test_count of 2 or explicit Test 2 data
+  const hasMultipleTests = centerStudents.some(s => s.test_count === 2 || (s.t2_attendance !== undefined && s.t2_attendance !== "Absent") || (s.t2_scores !== undefined && Object.keys(s.t2_scores).length > 0));
+
   // Average attendance of active pool (dynamic based on 1 vs 2 tests)
   let totalAttendanceOpportunities = 0;
   let attendedCount = 0;
   studentsWithAttendance.forEach(s => {
-    const limit = s.test_count === 1 ? 1 : 2;
+    const limit = (s.test_count === 1 || !hasMultipleTests) ? 1 : 2;
     totalAttendanceOpportunities += limit;
     if (isStudentPresentForTest(s, 1)) attendedCount++;
     if (limit === 2 && isStudentPresentForTest(s, 2)) attendedCount++;

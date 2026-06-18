@@ -144,6 +144,7 @@ export default function App() {
   const [importError, setImportError] = useState<string>("");
   const [hasImportedData, setHasImportedData] = useState<boolean>(false);
   const [selectedUploadMatrix, setSelectedUploadMatrix] = useState<"all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup">("all");
+  const [importMode, setImportMode] = useState<"overwrite" | "merge">("overwrite");
   
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(true);
   const [copiedTemplate, setCopiedTemplate] = useState<boolean>(false);
@@ -1578,9 +1579,10 @@ export default function App() {
         throw new Error("The selected file is empty or missing headers.");
       }
 
+      const useExistingList = importMode === "merge" && hasImportedData;
       const parsedStudents = parseSpreadsheetRowsToStudents(
         rows,
-        hasImportedData ? students : [],
+        useExistingList ? students : [],
         selectedUploadMatrix
       );
       if (parsedStudents.length === 0) {
@@ -1658,6 +1660,44 @@ export default function App() {
     } catch (err: any) {
       console.error("Local spreadsheet import failed:", err);
       setImportError(`Spreadsheet failure: ${err.message || err}`);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleForceRecalculate = async () => {
+    setIsImporting(true);
+    setImportError("");
+    try {
+      const parsed: Student[] = [];
+      const chunkSnapshot = await getDocs(collection(db, "students_chunks"));
+      if (!chunkSnapshot.empty) {
+        const chunks: any[] = [];
+        chunkSnapshot.forEach((docSnap) => {
+          chunks.push(docSnap.data());
+        });
+        chunks.sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+        chunks.forEach((c) => {
+          if (Array.isArray(c.students)) {
+            parsed.push(...c.students);
+          }
+        });
+      }
+      if (parsed.length === 0) {
+        const querySnapshot = await getDocs(collection(db, "students"));
+        querySnapshot.forEach((docSnap) => {
+          parsed.push(docSnap.data() as Student);
+        });
+      }
+
+      setStudents(parsed);
+      if (parsed.length > 0) {
+        setHasImportedData(true);
+        setSelectedCenterName(parsed[0].center || "All Centers Combined");
+      }
+      alert("🔄 Calculations synced successfully! All classroom metrics under active Windows have been recalculated perfectly.");
+    } catch (e: any) {
+      setImportError("Calculation sync failed: " + e.message);
     } finally {
       setIsImporting(false);
     }
@@ -2171,6 +2211,9 @@ export default function App() {
               handleDownloadRampUpXLSX={handleDownloadRampUpXLSX}
               selectedUploadMatrix={selectedUploadMatrix}
               setSelectedUploadMatrix={setSelectedUploadMatrix}
+              importMode={importMode}
+              setImportMode={setImportMode}
+              handleForceRecalculate={handleForceRecalculate}
               handleDrag={handleDrag}
               handleDrop={handleDrop}
               handleFileChange={handleFileChange}
