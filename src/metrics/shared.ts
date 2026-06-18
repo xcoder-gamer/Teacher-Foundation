@@ -63,6 +63,10 @@ export function getStudentPerformance(student: Student): {
 
 export function getActiveStudents(centerStudents: Student[]): Student[] {
   return centerStudents.filter(s => {
+    const hasTestAttendance = s.t1_attendance !== undefined || s.t2_attendance !== undefined;
+    if (!hasTestAttendance) {
+      return true;
+    }
     const isSingleTest = s.test_count === 1;
     return s.t1_attendance === "Present" || (!isSingleTest && s.t2_attendance === "Present");
   });

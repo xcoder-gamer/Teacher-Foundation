@@ -3,17 +3,18 @@ import { getActiveStudents } from "./shared";
 
 export function calculateIoqmScore(centerStudents: Student[]) {
   const activeStudents = getActiveStudents(centerStudents);
+  const studentsWithIoqm = activeStudents.filter(s => s.ioqm_score !== undefined && s.ioqm_score !== null);
 
-  if (activeStudents.length === 0) {
+  if (studentsWithIoqm.length === 0) {
     return {
-      ioqm_percent: 0,
-      ioqmScore: 0
+      ioqm_percent: null,
+      ioqmScore: null
     };
   }
 
-  // Average IOQM score for active students
-  const totalIoqm = activeStudents.reduce((sum, s) => sum + s.ioqm_score, 0);
-  const ioqm_percent = activeStudents.length > 0 ? totalIoqm / activeStudents.length : 0;
+  // Average IOQM score for active students with defined IOQM score
+  const totalIoqm = studentsWithIoqm.reduce((sum, s) => sum + (s.ioqm_score ?? 0), 0);
+  const ioqm_percent = totalIoqm / studentsWithIoqm.length;
   // <40% = 0; >90% = 100; 40-90% linear scale
   let ioqmScore = 0;
   if (ioqm_percent > 90) {

@@ -28,8 +28,8 @@ export interface Student {
   science_pct?: number;
 
   // Attendance for the latest 2 test windows
-  t1_attendance: "Present" | "Absent";
-  t2_attendance: "Present" | "Absent";
+  t1_attendance?: "Present" | "Absent";
+  t2_attendance?: "Present" | "Absent";
   
   // Test 1 subject percentage scores (0 to 100)
   t1_scores: SubjectScores;
@@ -38,7 +38,7 @@ export interface Student {
   t2_scores: SubjectScores;
   
   // IOQM Achievement percentage score (0 to 100)
-  ioqm_score: number;
+  ioqm_score?: number;
   
   // Ramp Up Test percentage score for 9th/10th graders (0 to 100, undefined for 11th/12th)
   ramp_up_score?: number;
@@ -58,23 +58,23 @@ export interface CenterScores {
   combined_center?: string;
   
   // Component scores (out of 100)
-  subjectiveTestScore: number;
-  elementA_percent: number;
-  elementA_score: number;
-  elementB_percent: number;
-  elementB_score: number;
+  subjectiveTestScore: number | null;
+  elementA_percent: number | null;
+  elementA_score: number | null;
+  elementB_percent: number | null;
+  elementB_score: number | null;
   
-  testAttendanceScore: number;
-  attendance_percent: number;
+  testAttendanceScore: number | null;
+  attendance_percent: number | null;
   
-  ioqmScore: number;
-  ioqm_percent: number;
+  ioqmScore: number | null;
+  ioqm_percent: number | null;
   
-  rampUpScore: number;
-  rampUp_percent: number;
+  rampUpScore: number | null;
+  rampUp_percent: number | null;
   
-  studentRetentionScore: number;
-  retention_percent: number;
+  studentRetentionScore: number | null;
+  retention_percent: number | null;
   
   // Final composite (out of 100)
   consolidatedScore: number;

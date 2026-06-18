@@ -47,9 +47,18 @@ interface FirestoreErrorInfo {
   }
 }
 
+let onFirestoreErrorOccurred: ((err: { message: string; isQuota: boolean }) => void) | null = null;
+
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  const isQuota = errMsg.toLowerCase().includes("quota exceeded") || errMsg.toLowerCase().includes("quota limit exceeded");
+  
+  if (onFirestoreErrorOccurred) {
+    onFirestoreErrorOccurred({ message: errMsg, isQuota });
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -116,6 +125,16 @@ import {
   Radar,
 } from "recharts";
 
+const safeFormatScore = (val: number | null | undefined): string => {
+  if (val === null || val === undefined) return "-";
+  return val.toFixed(1);
+};
+
+const safeFormatPercent = (val: number | null | undefined): string => {
+  if (val === null || val === undefined) return "-";
+  return val.toFixed(1) + "%";
+};
+
 export default function App() {
   // --- STATES ---
   const [students, setStudents] = useState<Student[]>(PRELOADED_STUDENTS);
@@ -134,6 +153,22 @@ export default function App() {
   const [coachedStudentIds, setCoachedStudentIds] = useState<string[]>([]);
   const [subjectiveSortBy, setSubjectiveSortBy] = useState<"percentage" | "name">("percentage");
   
+  // Database local-fallback alerts
+  const [dbError, setDbError] = useState<{ message: string; isQuota: boolean } | null>(null);
+
+  useEffect(() => {
+    onFirestoreErrorOccurred = (err) => {
+      setDbError((prev) => {
+        // Prevent duplicate updates unless they differ
+        if (prev?.isQuota === err.isQuota) return prev;
+        return err;
+      });
+    };
+    return () => {
+      onFirestoreErrorOccurred = null;
+    };
+  }, []);
+
   // Gemini AI Expert report states
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [aiReport, setAiReport] = useState<string>("");
@@ -266,6 +301,7 @@ export default function App() {
   // Initialize and load saved students & active coaching simulation state from Firestore on start
   useEffect(() => {
     const fetchInitialData = async () => {
+      let isFirestoreOperational = true;
       try {
         // 1. Fetch Students from Firestore (High-perf Chunks first with safe legacy fallback)
         const parsed: Student[] = [];
@@ -285,42 +321,65 @@ export default function App() {
           }
         } catch (chunkErr) {
           console.warn("Could not read students_chunks collection; falling back to legacy.", chunkErr);
+          isFirestoreOperational = false;
+          handleFirestoreError(chunkErr, OperationType.GET, "students_chunks");
         }
 
         // Drop down to legacy singular document load if chunks was empty or not found
-        if (parsed.length === 0) {
+        if (isFirestoreOperational && parsed.length === 0) {
           try {
             const querySnapshot = await getDocs(collection(db, "students"));
             querySnapshot.forEach((docSnap) => {
               parsed.push(docSnap.data() as Student);
             });
           } catch (e) {
+            isFirestoreOperational = false;
             handleFirestoreError(e, OperationType.GET, "students");
-            return;
           }
         }
 
         if (parsed.length > 0) {
           setStudents(parsed);
           setHasImportedData(true);
+        } else {
+          // Fall back gracefully to preloaded offline data if DB fails or is empty
+          setHasImportedData(true);
         }
 
         // 2. Fetch Active Coaching/Simulation State from Firestore
-        let coachingDoc;
-        try {
-          coachingDoc = await getDoc(doc(db, "coaching", "current"));
-        } catch (e) {
-          handleFirestoreError(e, OperationType.GET, "coaching/current");
-          return;
+        let loadedCoaching = false;
+        if (isFirestoreOperational) {
+          try {
+            const coachingDoc = await getDoc(doc(db, "coaching", "current"));
+            if (coachingDoc.exists()) {
+              const coachingData = coachingDoc.data();
+              if (coachingData.coachedStudentIds) {
+                setCoachedStudentIds(coachingData.coachedStudentIds);
+              }
+              if (coachingData.selectedCenterName) {
+                setSelectedCenterName(coachingData.selectedCenterName);
+              }
+              loadedCoaching = true;
+            }
+          } catch (e) {
+            isFirestoreOperational = false;
+            handleFirestoreError(e, OperationType.GET, "coaching/current");
+          }
         }
 
-        if (coachingDoc.exists()) {
-          const coachingData = coachingDoc.data();
-          if (coachingData.coachedStudentIds) {
-            setCoachedStudentIds(coachingData.coachedStudentIds);
-          }
-          if (coachingData.selectedCenterName) {
-            setSelectedCenterName(coachingData.selectedCenterName);
+        // Fallback offline restoration if Firestore fails or is empty
+        if (!loadedCoaching) {
+          try {
+            const savedCoachedIds = localStorage.getItem("offline_coached_student_ids");
+            const savedCenter = localStorage.getItem("offline_selected_center_name");
+            if (savedCoachedIds) {
+              setCoachedStudentIds(JSON.parse(savedCoachedIds));
+            }
+            if (savedCenter) {
+              setSelectedCenterName(savedCenter);
+            }
+          } catch (localErr) {
+            console.warn("Could not read offline coaching state fallback", localErr);
           }
         }
       } catch (e) {
@@ -336,6 +395,20 @@ export default function App() {
   // Auto-persist coaching list & selected center to Firestore on updates to keep sessions persistent
   useEffect(() => {
     if (!isInitialLoadDone) return;
+
+    // Fast-path local offline persistence to guarantee state recovery anytime
+    try {
+      localStorage.setItem("offline_coached_student_ids", JSON.stringify(coachedStudentIds));
+      localStorage.setItem("offline_selected_center_name", selectedCenterName);
+    } catch (localErr) {
+      console.warn("Could not write local config state fallback", localErr);
+    }
+
+    // Skip Firestore writes if exceeding daily API limits / quota has been flagged to protect performance
+    if (dbError) {
+      console.log("Firestore offline/quota active. State persisted offline.");
+      return;
+    }
     
     const persistCoaching = async () => {
       try {
@@ -354,7 +427,7 @@ export default function App() {
     };
 
     persistCoaching();
-  }, [coachedStudentIds, selectedCenterName, isInitialLoadDone]);
+  }, [coachedStudentIds, selectedCenterName, isInitialLoadDone, dbError]);
 
   // Clear simulated AI reports on center transitions so users see fresh relevant analysis
   useEffect(() => {
@@ -380,7 +453,7 @@ export default function App() {
         if (updatedT2.maths !== undefined && updatedT2.maths < 40) updatedT2.maths = 45;
 
         // Boost Olympiad IOQM scores to 90%
-        const simulatedIoqm = s.ioqm_score < 90 ? 90 : s.ioqm_score;
+        const simulatedIoqm = s.ioqm_score !== undefined ? (s.ioqm_score < 90 ? 90 : s.ioqm_score) : undefined;
 
         // Boost Ramp Up scores for 9th/10th graders to 85% (>80% topper ceiling)
         const simulatedRampUp = s.ramp_up_score !== undefined && s.ramp_up_score <= 80 ? 85 : s.ramp_up_score;
@@ -428,20 +501,20 @@ export default function App() {
     centerName: "No Active Centers",
     activeStudents: 0,
     rank: 1,
-    subjectiveTestScore: 0,
-    elementA_percent: 0,
-    elementA_score: 0,
-    elementB_percent: 0,
-    elementB_score: 0,
-    testAttendanceScore: 0,
-    attendance_percent: 0,
-    ioqmScore: 0,
-    ioqm_percent: 0,
-    rampUpScore: 0,
-    rampUp_percent: 0,
-    studentRetentionScore: 0,
-    retention_percent: 0,
-    consolidatedScore: 0
+    subjectiveTestScore: null,
+    elementA_percent: null,
+    elementA_score: null,
+    elementB_percent: null,
+    elementB_score: null,
+    testAttendanceScore: null,
+    attendance_percent: null,
+    ioqmScore: null,
+    ioqm_percent: null,
+    rampUpScore: null,
+    rampUp_percent: null,
+    studentRetentionScore: null,
+    retention_percent: null,
+    consolidatedScore: null
   }), []);
 
   const nationalCombinedMetrics = useMemo(() => {
@@ -1046,12 +1119,12 @@ export default function App() {
     // Filter students with low IOQM scores
     const getIoqmItems = () => {
       return activeStudents
-        .filter((s) => s.ioqm_score < 90)
+        .filter((s) => s.ioqm_score !== undefined && s.ioqm_score < 90)
         .map((s) => ({
           student: s,
-          currentScore: s.ioqm_score,
-          severity: s.ioqm_score < 40 ? ("critical" as const) : ("high" as const),
-          action: s.ioqm_score < 40 
+          currentScore: s.ioqm_score ?? 0,
+          severity: (s.ioqm_score ?? 0) < 40 ? ("critical" as const) : ("high" as const),
+          action: (s.ioqm_score ?? 0) < 40 
             ? "Scores <40% get 0 metrics weight! Focus on intermediate conceptual sheet practice immediately." 
             : "Scores 40-90% linearly scale. Pushing closer to 90% adds maximum rating points.",
         }));
@@ -1059,9 +1132,9 @@ export default function App() {
 
     // Filter 9th/10th graders with Ramp Up scores <80% (especially 60-80%)
     const getRampUpItems = () => {
-      const activeRamp = activeStudents.filter((s) => s.grade === "9" || s.grade === "10");
+      const activeRamp = activeStudents.filter((s) => (s.grade === "9" || s.grade === "10") && s.ramp_up_score !== undefined);
       return activeRamp
-        .filter((s) => s.ramp_up_score === undefined || s.ramp_up_score < 80)
+        .filter((s) => s.ramp_up_score !== undefined && s.ramp_up_score < 80)
         .map((s) => ({
           student: s,
           currentScore: s.ramp_up_score ?? 0,
@@ -1074,7 +1147,7 @@ export default function App() {
 
     // Filter students not retained
     const getRetentionItems = () => {
-      return centerStudents
+      const items = centerStudents
         .filter((s) => !s.retained)
         .map((s) => {
           const isDefaulter = s.defaulter_status?.toLowerCase().includes("defaulter") && !s.defaulter_status?.toLowerCase().includes("not");
@@ -1088,12 +1161,34 @@ export default function App() {
             actionLabel = "Fulfill fee collection: Contact parents to resolve late payment of 2nd EMI of fees.";
           }
           
+          // Calculate dynamic conversion probability (Possibility of converting)
+          // Fee Defaulters are generally easier to resolve (75% base) than Academic Inactives (40% base)
+          let baseProb = isDefaulter ? 75 : 40;
+          
+          // Students active in tests are highly engaged and easier to retain
+          if (s.t1_attendance === "Present") baseProb += 10;
+          if (s.t2_attendance === "Present") baseProb += 10;
+          if (s.t1_attendance === "Absent" && s.t2_attendance === "Absent") baseProb -= 15;
+          
+          // Good academic performers are easier to counsel back to active status
+          const perf = getStudentPerformance(s);
+          if (perf.averagePercent !== null) {
+            if (perf.averagePercent >= 75) baseProb += 8;
+            else if (perf.averagePercent >= 50) baseProb += 4;
+          }
+          
+          const conversionProb = Math.max(15, Math.min(95, baseProb));
+          
           return {
             student: s,
             subType,
-            action: actionLabel
+            action: actionLabel,
+            conversionProb
           };
         });
+
+      // Sort by conversion probability (highest probability first - "easily scoring")
+      return items.sort((a, b) => b.conversionProb - a.conversionProb);
     };
 
     return {
@@ -1194,12 +1289,12 @@ export default function App() {
     return res;
   }, [actionablePlan.retentionItems, retentionSearch]);
 
-  const retentionPageSize = 15;
-  const retentionTotalPages = Math.max(1, Math.ceil(filteredRetentionItems.length / retentionPageSize));
-  const paginatedRetentionItems = useMemo(() => {
-    const start = (retentionPage - 1) * retentionPageSize;
-    return filteredRetentionItems.slice(start, start + retentionPageSize);
-  }, [filteredRetentionItems, retentionPage]);
+  // Retention grouping
+  const groupedRetentionItems = useMemo(() => {
+    const feeDefaulters = filteredRetentionItems.filter(item => item.subType === "Fee Defaulter Student");
+    const inactiveStudents = filteredRetentionItems.filter(item => item.subType === "Inactive Student");
+    return { feeDefaulters, inactiveStudents };
+  }, [filteredRetentionItems]);
 
   // --- MASS SIMULATION TRIGGERS ---
   const handleApplyPresetTier1 = () => {
@@ -1994,6 +2089,44 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* DB QUOTA / CONNECTION ALERT BANNER */}
+      {dbError && (
+        <div className="bg-yellow-500/10 border-b border-yellow-500/20 px-6 py-2.5 relative z-40" id="db-quota-indicator">
+          <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5 animate-pulse" />
+              <div>
+                <p className="text-xs font-semibold text-yellow-500">
+                  {dbError.isQuota ? "Cloud Firestore Daily Read Quota Exceeded (Free Tier Status)" : "Database Sync Offline"}
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
+                  {dbError.isQuota ? (
+                    <>
+                      The daily Spark free-tier database read limits have been reached. The application has gracefully transitioned to using its zero-latency <strong>Local Preloaded Dataset & Offline Coaching Simulator</strong>. Session edits and simulations will persist locally in memory.
+                    </>
+                  ) : (
+                    <>
+                      An error occurred while connecting with the cloud database. The application is running in high-performance <strong>Offline Mode</strong> with full functionality.
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+            {dbError.isQuota && (
+              <a
+                href="https://console.firebase.google.com/project/attendance-app-239fb/firestore/databases/ai-studio-e3886ee2-0cd5-417d-87a7-488d7f4d6948/data?openUpgradeDialog=true"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-yellow-500 hover:bg-yellow-400 text-slate-950 px-3 py-1 rounded-lg text-[10px] font-mono font-bold transition flex items-center justify-center gap-1 shrink-0 active:scale-95 shadow-md hover:shadow-yellow-500/25"
+              >
+                <span>Open Firebase Console</span>
+                <ExternalLink className="w-3 h-3 shrink-0" />
+              </a>
+            )}
+          </div>
+        </div>
+      )}
 
       {!hasImportedData && (
         <div className="bg-yellow-500/10 border-b border-yellow-500/30 text-yellow-500 px-6 py-3 text-xs" id="demo-mode-alert">
@@ -2987,22 +3120,22 @@ export default function App() {
                         </td>
                       )}
                       <td className="p-3 font-mono font-bold text-center bg-cyan-500/10 text-cyan-400 text-xs shadow-inner">
-                        {nationalCombinedMetrics.consolidatedScore.toFixed(1)}
+                        {safeFormatScore(nationalCombinedMetrics.consolidatedScore)}
                       </td>
                       <td className="p-3 font-mono text-center text-slate-300">
-                        {nationalCombinedMetrics.subjectiveTestScore.toFixed(1)}
+                        {safeFormatScore(nationalCombinedMetrics.subjectiveTestScore)}
                       </td>
                       <td className="p-3 font-mono text-center text-slate-300">
-                        {nationalCombinedMetrics.ioqmScore.toFixed(1)}
+                        {safeFormatScore(nationalCombinedMetrics.ioqmScore)}
                       </td>
                       <td className="p-3 font-mono text-center text-slate-300">
-                        {nationalCombinedMetrics.rampUpScore.toFixed(1)}
+                        {safeFormatScore(nationalCombinedMetrics.rampUpScore)}
                       </td>
                       <td className="p-2.5 font-mono text-center text-slate-300">
-                        {nationalCombinedMetrics.testAttendanceScore.toFixed(1)}
+                        {safeFormatScore(nationalCombinedMetrics.testAttendanceScore)}
                       </td>
                       <td className="p-2.5 font-mono text-center text-slate-300">
-                        {nationalCombinedMetrics.studentRetentionScore.toFixed(1)}
+                        {safeFormatScore(nationalCombinedMetrics.studentRetentionScore)}
                       </td>
                     </tr>
 
@@ -3055,22 +3188,22 @@ export default function App() {
                             </td>
                           )}
                           <td className="p-3 font-mono font-bold text-center bg-yellow-500/10 text-yellow-405 text-xs shadow-inner">
-                            {item.consolidatedScore.toFixed(1)}
+                            {safeFormatScore(item.consolidatedScore)}
                           </td>
                           <td className="p-3 font-mono text-center text-slate-350">
-                            {item.subjectiveTestScore.toFixed(1)}
+                            {safeFormatScore(item.subjectiveTestScore)}
                           </td>
                           <td className="p-3 font-mono text-center text-slate-350">
-                            {item.ioqmScore.toFixed(1)}
+                            {safeFormatScore(item.ioqmScore)}
                           </td>
                           <td className="p-3 font-mono text-center text-slate-350">
-                            {item.rampUpScore.toFixed(1)}
+                            {safeFormatScore(item.rampUpScore)}
                           </td>
                           <td className="p-2.5 font-mono text-center text-slate-350">
-                            {item.testAttendanceScore.toFixed(1)}
+                            {safeFormatScore(item.testAttendanceScore)}
                           </td>
                           <td className="p-2.5 font-mono text-center text-slate-350">
-                            {item.studentRetentionScore.toFixed(1)}
+                            {safeFormatScore(item.studentRetentionScore)}
                           </td>
                         </tr>
                       );
@@ -3623,12 +3756,14 @@ export default function App() {
                       <div>
                         <div className="flex justify-between text-xs font-mono mb-1">
                           <span className="text-slate-400 font-semibold">Subjective Test (25%)</span>
-                          <span className="text-yellow-400 font-bold">{selectedCenterScores.subjectiveTestScore.toFixed(1)}/100</span>
+                          <span className="text-yellow-400 font-bold">
+                            {selectedCenterScores.subjectiveTestScore !== null ? `${safeFormatScore(selectedCenterScores.subjectiveTestScore)}/100` : "N/A"}
+                          </span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                           <div 
                             className="bg-yellow-500 h-full transition-all duration-500" 
-                            style={{ width: `${selectedCenterScores.subjectiveTestScore}%` }}
+                            style={{ width: `${selectedCenterScores.subjectiveTestScore ?? 0}%` }}
                           />
                         </div>
                       </div>
@@ -3636,12 +3771,14 @@ export default function App() {
                       <div>
                         <div className="flex justify-between text-xs font-mono mb-1">
                           <span className="text-slate-400 font-semibold">IOQM Achievement (20%)</span>
-                          <span className="text-cyan-400 font-bold">{selectedCenterScores.ioqmScore.toFixed(1)}/100</span>
+                          <span className="text-cyan-400 font-bold">
+                            {selectedCenterScores.ioqmScore !== null ? `${safeFormatScore(selectedCenterScores.ioqmScore)}/100` : "N/A"}
+                          </span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                           <div 
                             className="bg-cyan-500 h-full transition-all duration-500" 
-                            style={{ width: `${selectedCenterScores.ioqmScore}%` }}
+                            style={{ width: `${selectedCenterScores.ioqmScore ?? 0}%` }}
                           />
                         </div>
                       </div>
@@ -3649,12 +3786,14 @@ export default function App() {
                       <div>
                         <div className="flex justify-between text-xs font-mono mb-1">
                           <span className="text-slate-400 font-semibold">Ramp Up Exams (15%)</span>
-                          <span className="text-purple-400 font-bold">{selectedCenterScores.rampUpScore.toFixed(1)}/100</span>
+                          <span className="text-purple-400 font-bold">
+                            {selectedCenterScores.rampUpScore !== null ? `${safeFormatScore(selectedCenterScores.rampUpScore)}/100` : "N/A"}
+                          </span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                           <div 
                             className="bg-purple-500 h-full transition-all duration-500" 
-                            style={{ width: `${selectedCenterScores.rampUpScore}%` }}
+                            style={{ width: `${selectedCenterScores.rampUpScore ?? 0}%` }}
                           />
                         </div>
                       </div>
@@ -3664,12 +3803,14 @@ export default function App() {
                       <div>
                         <div className="flex justify-between text-xs font-mono mb-1">
                           <span className="text-slate-400 font-semibold">Test Attendance (10%)</span>
-                          <span className="text-emerald-400 font-bold">{selectedCenterScores.testAttendanceScore.toFixed(1)}/100</span>
+                          <span className="text-emerald-400 font-bold">
+                            {selectedCenterScores.testAttendanceScore !== null ? `${safeFormatScore(selectedCenterScores.testAttendanceScore)}/100` : "N/A"}
+                          </span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                           <div 
                             className="bg-emerald-500 h-full transition-all duration-500" 
-                            style={{ width: `${selectedCenterScores.testAttendanceScore}%` }}
+                            style={{ width: `${selectedCenterScores.testAttendanceScore ?? 0}%` }}
                           />
                         </div>
                       </div>
@@ -3677,12 +3818,14 @@ export default function App() {
                       <div>
                         <div className="flex justify-between text-xs font-mono mb-1">
                           <span className="text-slate-400 font-semibold">Student Retention (30%)</span>
-                          <span className="text-orange-400 font-bold">{selectedCenterScores.studentRetentionScore.toFixed(1)}/100</span>
+                          <span className="text-orange-400 font-bold">
+                            {selectedCenterScores.studentRetentionScore !== null ? `${safeFormatScore(selectedCenterScores.studentRetentionScore)}/100` : "N/A"}
+                          </span>
                         </div>
                         <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                           <div 
                             className="bg-orange-500 h-full transition-all duration-500" 
-                            style={{ width: `${selectedCenterScores.studentRetentionScore}%` }}
+                            style={{ width: `${selectedCenterScores.studentRetentionScore ?? 0}%` }}
                           />
                         </div>
                       </div>
@@ -3823,12 +3966,16 @@ export default function App() {
                     <h4 className="text-sm font-semibold text-slate-200 mt-1.5 flex justify-between items-center">
                       <span>Unique Toppers Ratio (Avg &gt;= 90%):</span>
                       <strong className="text-yellow-400 text-lg">
-                        {selectedCenterScores.elementA_percent.toFixed(1)}%
+                        {safeFormatPercent(selectedCenterScores.elementA_percent)}
                       </strong>
                     </h4>
                     <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                      Awarded points: <strong className="text-slate-100">{selectedCenterScores.elementA_score.toFixed(1)}/100</strong>. 
-                      {selectedCenterScores.elementA_percent >= 15 ? (
+                      Awarded points: <strong className="text-slate-100">{safeFormatScore(selectedCenterScores.elementA_score)}/100</strong>. 
+                      {selectedCenterScores.elementB_score === null && selectedCenterScores.elementB_percent === null ? (
+                        <span className="text-slate-500 block mt-1 font-medium font-mono text-[10px]">
+                          ⚠ No subjective test records available.
+                        </span>
+                      ) : selectedCenterScores.elementA_percent !== null && selectedCenterScores.elementA_percent >= 15 ? (
                         <span className="text-emerald-400 block mt-1 font-medium font-mono text-[10px]">
                           ✓ Maxed out! Achieved standard target (&gt;= 15%).
                         </span>
@@ -3848,12 +3995,16 @@ export default function App() {
                     <h4 className="text-sm font-semibold text-slate-200 mt-1.5 flex justify-between items-center">
                       <span>Papers under 40% (Fail-rate):</span>
                       <strong className="text-rose-400 text-lg">
-                        {selectedCenterScores.elementB_percent.toFixed(1)}%
+                        {safeFormatPercent(selectedCenterScores.elementB_percent)}
                       </strong>
                     </h4>
                     <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-                      Awarded points: <strong className="text-slate-100">{selectedCenterScores.elementB_score.toFixed(1)}/100</strong>.
-                      {selectedCenterScores.elementB_percent <= 5 ? (
+                      Awarded points: <strong className="text-slate-100">{safeFormatScore(selectedCenterScores.elementB_score)}/100</strong>.
+                      {selectedCenterScores.elementB_score === null && selectedCenterScores.elementB_percent === null ? (
+                        <span className="text-slate-500 block mt-1 font-medium font-mono text-[10px]">
+                          ⚠ Blank/No scoring data (0 points considered).
+                        </span>
+                      ) : selectedCenterScores.elementB_percent !== null && selectedCenterScores.elementB_percent <= 5 ? (
                         <span className="text-emerald-400 block mt-1 font-medium font-mono text-[10px]">
                           ✓ Safe bracket! Failing papers are below 5%.
                         </span>
@@ -4073,7 +4224,7 @@ export default function App() {
                     </h2>
                     <p className="text-xs text-slate-400">Total Weight: 20% of final national leaderboard score.</p>
                   </div>
-                  <span className="text-xs font-bold font-mono text-cyan-400 bg-cyan-500/10 px-2.5 py-1 rounded">Score: {selectedCenterScores.ioqmScore.toFixed(1)}/100</span>
+                  <span className="text-xs font-bold font-mono text-cyan-400 bg-cyan-500/10 px-2.5 py-1 rounded">Score: {safeFormatScore(selectedCenterScores.ioqmScore)}/100</span>
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
@@ -4223,7 +4374,7 @@ export default function App() {
                     </h2>
                     <p className="text-xs text-slate-400">Total Weight: 15% of final national leaderboard score.</p>
                   </div>
-                  <span className="text-xs font-bold font-mono text-purple-400 bg-purple-500/10 px-2.5 py-1 rounded">Score: {selectedCenterScores.rampUpScore.toFixed(1)}/100</span>
+                  <span className="text-xs font-bold font-mono text-purple-400 bg-purple-500/10 px-2.5 py-1 rounded">Score: {safeFormatScore(selectedCenterScores.rampUpScore)}/100</span>
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
@@ -4370,7 +4521,7 @@ export default function App() {
                     </h2>
                     <p className="text-xs text-slate-400">Total Weight: 10% of final national leaderboard score.</p>
                   </div>
-                  <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded">Score: {selectedCenterScores.testAttendanceScore.toFixed(1)}/100</span>
+                  <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded">Score: {safeFormatScore(selectedCenterScores.testAttendanceScore)}/100</span>
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
@@ -4550,7 +4701,7 @@ export default function App() {
                     </h2>
                     <p className="text-xs text-slate-400">Total Weight: 30% of final national leaderboard score.</p>
                   </div>
-                  <span className="text-xs font-bold font-mono text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded">Score: {selectedCenterScores.studentRetentionScore.toFixed(1)}/100</span>
+                  <span className="text-xs font-bold font-mono text-orange-400 bg-orange-500/10 px-2.5 py-1 rounded">Score: {safeFormatScore(selectedCenterScores.studentRetentionScore)}/100</span>
                 </div>
 
                 <p className="text-xs text-slate-300 leading-normal font-sans">
@@ -4559,8 +4710,8 @@ export default function App() {
 
                 {renderSimulatorImpactPanel("retention")}
 
-                {/* PAGINATION & SEARCH FOR RETENTION */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-805 border-slate-800">
+                {/* SEARCH FOR RETENTION */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 p-4 rounded-lg border border-slate-800">
                   <div className="relative flex-1 max-w-sm">
                     <input
                       type="text"
@@ -4574,22 +4725,17 @@ export default function App() {
                     />
                   </div>
                   <div className="text-[11px] font-mono text-slate-400">
-                    Showing {paginatedRetentionItems.length} of {filteredRetentionItems.length} filtered items ({actionablePlan.retentionItems.length} total)
+                    Showing {filteredRetentionItems.length} of {actionablePlan.retentionItems.length} total at-risk items
                   </div>
                 </div>
 
-                <div className="space-y-3 pt-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1">
-                    <AlertCircle className="w-3.5 h-3.5 text-orange-400" />
-                    At-Risk Dropped-out Pupils requiring counseling feedback ({filteredRetentionItems.length} found):
-                  </h3>
-
+                <div className="space-y-4 pt-2">
                   {filteredRetentionItems.length === 0 ? (
                     <p className="text-xs text-slate-500 italic pb-2">No students matching the search filter found.</p>
                   ) : (
-                    <div>
+                    <div className="space-y-5">
                       {/* INTEGRATED RETENTION PREDICTION ENGINE METRIC ACCENT */}
-                      <div className="mb-4 bg-slate-950 p-4 border border-orange-500/20 rounded-xl space-y-3">
+                      <div className="bg-slate-950 p-4 border border-orange-500/20 rounded-xl space-y-3">
                         <div className="flex justify-between items-start">
                           <div>
                             <span className="text-[10px] bg-orange-500/10 text-orange-400 font-mono font-bold tracking-widest uppercase px-2 py-0.5 rounded">
@@ -4612,7 +4758,7 @@ export default function App() {
                               const targetIds = filteredRetentionItems.map(item => item.student.id);
                               setCoachedStudentIds(Array.from(new Set([...coachedStudentIds, ...targetIds])));
                             }}
-                            className="bg-orange-600 hover:bg-orange-500 text-slate-50 font-semibold py-1 px-2.5 rounded cursor-pointer"
+                            className="bg-orange-600 hover:bg-orange-500 text-slate-50 font-semibold py-1 px-2.5 rounded cursor-pointer transition active:scale-95"
                           >
                             Predict ALL Resolved (+ Rank Increase)
                           </button>
@@ -4621,55 +4767,143 @@ export default function App() {
                               const targetIds = filteredRetentionItems.map(item => item.student.id);
                               setCoachedStudentIds(coachedStudentIds.filter(id => !targetIds.includes(id)));
                             }}
-                            className="bg-slate-850 hover:bg-slate-800 text-slate-350 border border-slate-750 font-semibold py-1 px-2.5 rounded cursor-pointer"
+                            className="bg-slate-850 hover:bg-slate-800 text-slate-350 border border-slate-750 font-semibold py-1 px-2.5 rounded cursor-pointer transition"
                           >
                             Reset Prediction Box
                           </button>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="retention-checklist-elements">
-                        {paginatedRetentionItems.map(({ student, subType, action }) => {
-                          const isCoached = coachedStudentIds.includes(student.id);
-                          return (
-                            <button
-                              key={student.id}
-                              onClick={() => handleToggleCoach(student.id)}
-                              className={`flex items-start text-left p-3.5 rounded-lg border transition-all duration-155 cursor-pointer ${
-                                isCoached
-                                  ? "bg-slate-850 border-orange-500/70 shadow-md shadow-orange-500/5"
-                                  : "bg-slate-950 border-slate-800 hover:border-slate-705"
-                              }`}
-                            >
-                              <div className="mr-3 mt-0.5 text-orange-400">
-                                {isCoached ? (
-                                  <span className="bg-orange-500 text-slate-950 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-extrabold">✓</span>
-                                ) : (
-                                  <span className="border-2 border-slate-600 hover:border-orange-500 rounded-full w-5 h-5 block" />
-                                )}
+                      {/* GROUP 1: FEE DEFAULTERS */}
+                      {groupedRetentionItems.feeDefaulters.length > 0 && (
+                        <div className="border border-slate-800 rounded-xl p-4 bg-slate-950/40 space-y-3">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                  CATEGORY HEADER
+                                </span>
+                                <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wide">
+                                  💰 Fee Defaulter Students ({groupedRetentionItems.feeDefaulters.length})
+                                </h4>
                               </div>
-                              <div className="flex-1">
-                                <div className="flex justify-between items-center text-xs">
-                                  <span className={`font-semibold ${isCoached ? "text-orange-400 font-bold" : "text-slate-100"}`}>{student.name}</span>
-                                  <span className="text-[10px] font-mono text-slate-400 font-semibold">{student.id}</span>
-                                </div>
-                                <div className="text-[11px] text-slate-400 mt-1 leading-normal font-sans">
-                                  Category Label: <span className={`font-bold font-mono ${subType === "Fee Defaulter Student" ? "text-amber-400" : "text-rose-400"}`}>{subType}</span>
-                                  <br />{isCoached ? (
-                                    <span className="text-emerald-400 font-semibold">✓ Resolved (Predicted Active & Paid)</span>
-                                  ) : (
-                                    <>Support Action: <span className="text-slate-300 font-bold">{action}</span></>
+                              <p className="text-[11px] text-slate-400 mt-1">
+                                <span className="font-semibold text-amber-400 font-mono">SUPPORT ACTION:</span> Fulfill fee collection: Contact parents to resolve late payment of 2nd EMI of fees.
+                              </p>
+                            </div>
+                            <div className="text-[10px] text-emerald-400 font-medium bg-emerald-500/5 px-2.5 py-1 rounded border border-emerald-500/10 shrink-0 self-start md:self-center">
+                              ⚡ High Scoring Opportunity
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+                            {groupedRetentionItems.feeDefaulters.map(({ student, conversionProb }) => {
+                              const isCoached = coachedStudentIds.includes(student.id);
+                              return (
+                                <button
+                                  key={student.id}
+                                  onClick={() => handleToggleCoach(student.id)}
+                                  className={`flex items-center justify-between p-2.5 rounded-lg border text-left transition-all duration-150 cursor-pointer ${
+                                    isCoached
+                                      ? "bg-slate-850 border-orange-500/70 shadow-sm"
+                                      : "bg-slate-950 border-slate-800 hover:border-slate-700 hover:bg-slate-900"
+                                  }`}
+                                >
+                                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                                    <div className="shrink-0 mt-0.5">
+                                      {isCoached ? (
+                                        <span className="bg-orange-500 text-slate-950 rounded-full w-4.5 h-4.5 flex items-center justify-center text-[10px] font-extrabold">✓</span>
+                                      ) : (
+                                        <span className="border border-slate-600 hover:border-orange-500 rounded-full w-4.5 h-4.5 block" />
+                                      )}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className={`text-xs font-semibold whitespace-normal break-words leading-snug ${isCoached ? "text-orange-400 font-bold" : "text-slate-100"}`}>
+                                        {student.name}
+                                      </div>
+                                      <div className="text-[9px] font-mono text-slate-500 mt-0.5">
+                                        ID: {student.id}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {isCoached && (
+                                    <div className="shrink-0 ml-2">
+                                      <span className="text-[9px] font-semibold text-emerald-400 block bg-emerald-500/10 px-1.5 py-0.5 rounded">Paid</span>
+                                    </div>
                                   )}
-                                </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* GROUP 2: INACTIVE STUDENTS */}
+                      {groupedRetentionItems.inactiveStudents.length > 0 && (
+                        <div className="border border-slate-800 rounded-xl p-4 bg-slate-950/40 space-y-3">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                  CATEGORY HEADER
+                                </span>
+                                <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wide">
+                                  ⚠️ Academically Inactive Students ({groupedRetentionItems.inactiveStudents.length})
+                                </h4>
                               </div>
-                            </button>
-                          );
-                        })}
-                      </div>
+                              <p className="text-[11px] text-slate-400 mt-1">
+                                <span className="font-semibold text-rose-400 font-mono">SUPPORT ACTION:</span> Fulfill academic contact: Schedule parent counseling to change Inactive status to Active.
+                              </p>
+                            </div>
+                            <div className="text-[10px] text-cyan-400 font-medium bg-cyan-500/5 px-2.5 py-1 rounded border border-cyan-500/10 shrink-0 self-start md:self-center">
+                              📘 Counselling Required
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+                            {groupedRetentionItems.inactiveStudents.map(({ student, conversionProb }) => {
+                              const isCoached = coachedStudentIds.includes(student.id);
+                              return (
+                                <button
+                                  key={student.id}
+                                  onClick={() => handleToggleCoach(student.id)}
+                                  className={`flex items-center justify-between p-2.5 rounded-lg border text-left transition-all duration-155 cursor-pointer ${
+                                    isCoached
+                                      ? "bg-slate-850 border-orange-500/70 shadow-sm"
+                                      : "bg-slate-950 border-slate-800 hover:border-slate-700 hover:bg-slate-900"
+                                  }`}
+                                >
+                                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                                    <div className="shrink-0 mt-0.5">
+                                      {isCoached ? (
+                                        <span className="bg-orange-500 text-slate-950 rounded-full w-4.5 h-4.5 flex items-center justify-center text-[10px] font-extrabold">✓</span>
+                                      ) : (
+                                        <span className="border border-slate-600 hover:border-orange-500 rounded-full w-4.5 h-4.5 block" />
+                                      )}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className={`text-xs font-semibold whitespace-normal break-words leading-snug ${isCoached ? "text-orange-400 font-bold" : "text-slate-100"}`}>
+                                        {student.name}
+                                      </div>
+                                      <div className="text-[9px] font-mono text-slate-500 mt-0.5">
+                                        ID: {student.id}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {isCoached && (
+                                    <div className="shrink-0 ml-2">
+                                      <span className="text-[9px] font-semibold text-emerald-400 block bg-emerald-500/10 px-1.5 py-0.5 rounded">Active</span>
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-
 
               </div>
             </div>
@@ -4981,7 +5215,7 @@ export default function App() {
                       1. Subjective Tests (25% Weight)
                     </span>
                     <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-cyan-400 border border-slate-800">
-                      Score: {selectedCenterScores.subjectiveTestScore.toFixed(1)}/100
+                      Score: {safeFormatScore(selectedCenterScores.subjectiveTestScore)}/100
                     </span>
                   </div>
                   
@@ -4993,7 +5227,7 @@ export default function App() {
                       </p>
                       <div className="text-[10px] font-mono text-cyan-400 font-bold bg-slate-900/60 px-2 py-1 rounded border border-slate-800 mt-1 flex justify-between">
                         <span>{selectedCenterScores.centerName} Active Toppers:</span>
-                        <span>{selectedCenterScores.elementA_percent.toFixed(1)}% &rarr; {selectedCenterScores.elementA_score.toFixed(1)}/100 pts</span>
+                        <span>{safeFormatPercent(selectedCenterScores.elementA_percent)} &rarr; {safeFormatScore(selectedCenterScores.elementA_score)}/100 pts</span>
                       </div>
                     </div>
 
@@ -5004,14 +5238,14 @@ export default function App() {
                       </p>
                       <div className="text-[10px] font-mono text-cyan-400 font-bold bg-slate-900/60 px-2 py-1 rounded border border-slate-800 mt-1 flex justify-between">
                         <span>{selectedCenterScores.centerName} Fail-Rate:</span>
-                        <span>{selectedCenterScores.elementB_percent.toFixed(1)}% &rarr; {selectedCenterScores.elementB_score.toFixed(1)}/100 pts</span>
+                        <span>{safeFormatPercent(selectedCenterScores.elementB_percent)} &rarr; {safeFormatScore(selectedCenterScores.elementB_score)}/100 pts</span>
                       </div>
                     </div>
 
                     <div className="pt-2 border-t border-slate-800/60">
                       <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
                       <p className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 select-all leading-relaxed break-all">
-                        ({selectedCenterScores.elementA_score.toFixed(1)} * 0.60) + ({selectedCenterScores.elementB_score.toFixed(1)} * 0.40) = <strong>{selectedCenterScores.subjectiveTestScore.toFixed(2)} pts</strong>
+                        ({safeFormatScore(selectedCenterScores.elementA_score)} * 0.60) + ({safeFormatScore(selectedCenterScores.elementB_score)} * 0.40) = <strong>{safeFormatScore(selectedCenterScores.subjectiveTestScore)} pts</strong>
                       </p>
                     </div>
                   </div>
@@ -5025,7 +5259,7 @@ export default function App() {
                       2. IOQM Achievement (20% Weight)
                     </span>
                     <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-yellow-400 border border-slate-800">
-                      Score: {selectedCenterScores.ioqmScore.toFixed(1)}/100
+                      Score: {safeFormatScore(selectedCenterScores.ioqmScore)}/100
                     </span>
                   </div>
 
@@ -5045,9 +5279,9 @@ export default function App() {
                     <div className="pt-2 border-t border-slate-800/60">
                       <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
                       <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
-                        <div>Center Active Average IOQM: <strong className="text-slate-100">{selectedCenterScores.ioqm_percent.toFixed(2)}%</strong></div>
+                        <div>Center Active Average IOQM: <strong className="text-slate-100">{safeFormatPercent(selectedCenterScores.ioqm_percent)}</strong></div>
                         <div className="pt-1 border-t border-slate-850/80 text-yellow-400 leading-relaxed">
-                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.ioqm_percent.toFixed(2)} - 40) / 50) * 100)) = <strong>{selectedCenterScores.ioqmScore.toFixed(2)} pts</strong>
+                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.ioqm_percent !== null ? selectedCenterScores.ioqm_percent.toFixed(2) : "0.00"} - 40) / 50) * 100)) = <strong>{safeFormatScore(selectedCenterScores.ioqmScore)} pts</strong>
                         </div>
                       </div>
                     </div>
@@ -5062,7 +5296,7 @@ export default function App() {
                       3. Ramp Up Exams (15% Weight)
                     </span>
                     <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-purple-400 border border-slate-800">
-                      Score: {selectedCenterScores.rampUpScore.toFixed(1)}/100
+                      Score: {safeFormatScore(selectedCenterScores.rampUpScore)}/100
                     </span>
                   </div>
 
@@ -5082,9 +5316,9 @@ export default function App() {
                     <div className="pt-2 border-t border-slate-800/60">
                       <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
                       <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
-                        <div>Center 9th/10th Toppers Ratio: <strong className="text-slate-100">{selectedCenterScores.rampUp_percent.toFixed(2)}%</strong></div>
+                        <div>Center 9th/10th Toppers Ratio: <strong className="text-slate-100">{safeFormatPercent(selectedCenterScores.rampUp_percent)}</strong></div>
                         <div className="pt-1 border-t border-slate-850/80 text-purple-400 leading-relaxed">
-                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.rampUp_percent.toFixed(2)} - 1) / 4) * 100)) = <strong>{selectedCenterScores.rampUpScore.toFixed(2)} pts</strong>
+                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.rampUp_percent !== null ? selectedCenterScores.rampUp_percent.toFixed(2) : "0.00"} - 1) / 4) * 100)) = <strong>{safeFormatScore(selectedCenterScores.rampUpScore)} pts</strong>
                         </div>
                       </div>
                     </div>
@@ -5099,7 +5333,7 @@ export default function App() {
                       4. Test Attendance (10% Weight)
                     </span>
                     <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-emerald-400 border border-slate-800">
-                      Score: {selectedCenterScores.testAttendanceScore.toFixed(1)}/100
+                      Score: {safeFormatScore(selectedCenterScores.testAttendanceScore)}/100
                     </span>
                   </div>
 
@@ -5119,9 +5353,9 @@ export default function App() {
                     <div className="pt-2 border-t border-slate-800/60">
                       <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
                       <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
-                        <div>Center Active Attendance Rate: <strong className="text-slate-100">{selectedCenterScores.attendance_percent.toFixed(2)}%</strong></div>
+                        <div>Center Active Attendance Rate: <strong className="text-slate-100">{safeFormatPercent(selectedCenterScores.attendance_percent)}</strong></div>
                         <div className="pt-1 border-t border-slate-850/80 text-emerald-400 leading-relaxed">
-                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.attendance_percent.toFixed(2)} - 50) / 25) * 100)) = <strong>{selectedCenterScores.testAttendanceScore.toFixed(2)} pts</strong>
+                          Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.attendance_percent !== null ? selectedCenterScores.attendance_percent.toFixed(2) : "0.00"} - 50) / 25) * 100)) = <strong>{safeFormatScore(selectedCenterScores.testAttendanceScore)} pts</strong>
                         </div>
                       </div>
                     </div>
@@ -5136,7 +5370,7 @@ export default function App() {
                       5. Student Retention (30% Weight) - The Core Metric Lever
                     </span>
                     <span className="text-xs font-mono font-bold bg-slate-950 px-2 py-0.5 rounded text-orange-400 border border-slate-800">
-                      Score: {selectedCenterScores.studentRetentionScore.toFixed(1)}/100
+                      Score: {safeFormatScore(selectedCenterScores.studentRetentionScore)}/100
                     </span>
                   </div>
 
@@ -5166,9 +5400,9 @@ export default function App() {
                       <div className="border-t border-slate-800/60 pt-2">
                         <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1">Live Calculus Walkthrough:</span>
                         <div className="font-mono text-[10px] text-emerald-400 bg-slate-950 px-2.5 py-1.5 rounded border border-slate-850 space-y-1 leading-normal">
-                          <div>Center Active Retention Rate: <strong className="text-slate-100">{selectedCenterScores.retention_percent.toFixed(2)}%</strong></div>
+                          <div>Center Active Retention Rate: <strong className="text-slate-100">{safeFormatPercent(selectedCenterScores.retention_percent)}</strong></div>
                           <div className="pt-1 border-t border-slate-850/80 text-orange-400 leading-relaxed">
-                            Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.retention_percent.toFixed(2)} - 75) / 20) * 100)) = <strong>{selectedCenterScores.studentRetentionScore.toFixed(2)} pts</strong>
+                            Applied Eq: Math.max(0, Math.min(100, (({selectedCenterScores.retention_percent !== null ? selectedCenterScores.retention_percent.toFixed(2) : "0.00"} - 75) / 20) * 100)) = <strong>{safeFormatScore(selectedCenterScores.studentRetentionScore)} pts</strong>
                           </div>
                         </div>
                       </div>
@@ -5185,8 +5419,8 @@ export default function App() {
                         Synthesis: {selectedCenterScores.centerName} Consolidated Final Score
                       </h3>
                     </div>
-                    <span className="bg-yellow-500/15 border border-yellow-500/30 text-yellow-405 text-yellow-400 font-mono font-bold text-sm px-3 py-1 rounded">
-                      Consolidated: {selectedCenterScores.consolidatedScore.toFixed(1)}/100
+                    <span className="bg-yellow-500/15 border border-yellow-500/30 text-yellow-400 font-mono font-bold text-sm px-3 py-1 rounded">
+                      Consolidated: {safeFormatScore(selectedCenterScores.consolidatedScore)}/100
                     </span>
                   </div>
 
@@ -5198,36 +5432,36 @@ export default function App() {
                     {/* Visual Progress Composition bar */}
                     <div className="h-6 w-full rounded-lg overflow-hidden flex font-mono text-[9px] font-bold text-slate-950 select-none border border-slate-950">
                       <div 
-                        title={`Subjective Contribution: ${(selectedCenterScores.subjectiveTestScore * 0.25).toFixed(1)} pts`}
-                        style={{ width: `${(selectedCenterScores.subjectiveTestScore * 0.25)}%` }} 
+                        title={`Subjective Contribution: ${selectedCenterScores.subjectiveTestScore !== null ? ((selectedCenterScores.subjectiveTestScore ?? 0) * 0.25).toFixed(1) : "0.0"} pts`}
+                        style={{ width: `${(selectedCenterScores.subjectiveTestScore ?? 0) * 0.25}%` }} 
                         className="bg-cyan-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
                       >
                         SUB
                       </div>
                       <div 
-                        title={`IOQM Contribution: ${(selectedCenterScores.ioqmScore * 0.20).toFixed(1)} pts`}
-                        style={{ width: `${(selectedCenterScores.ioqmScore * 0.20)}%` }} 
+                        title={`IOQM Contribution: ${selectedCenterScores.ioqmScore !== null ? ((selectedCenterScores.ioqmScore ?? 0) * 0.20).toFixed(1) : "0.0"} pts`}
+                        style={{ width: `${(selectedCenterScores.ioqmScore ?? 0) * 0.20}%` }} 
                         className="bg-yellow-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
                       >
                         IOQM
                       </div>
                       <div 
-                        title={`Ramp Up Contribution: ${(selectedCenterScores.rampUpScore * 0.15).toFixed(1)} pts`}
-                        style={{ width: `${(selectedCenterScores.rampUpScore * 0.15)}%` }} 
+                        title={`Ramp Up Contribution: ${selectedCenterScores.rampUpScore !== null ? ((selectedCenterScores.rampUpScore ?? 0) * 0.15).toFixed(1) : "0.0"} pts`}
+                        style={{ width: `${(selectedCenterScores.rampUpScore ?? 0) * 0.15}%` }} 
                         className="bg-purple-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
                       >
                         RAMP
                       </div>
                       <div 
-                        title={`Attendance Contribution: ${(selectedCenterScores.testAttendanceScore * 0.10).toFixed(1)} pts`}
-                        style={{ width: `${(selectedCenterScores.testAttendanceScore * 0.10)}%` }} 
+                        title={`Attendance Contribution: ${selectedCenterScores.testAttendanceScore !== null ? ((selectedCenterScores.testAttendanceScore ?? 0) * 0.10).toFixed(1) : "0.0"} pts`}
+                        style={{ width: `${(selectedCenterScores.testAttendanceScore ?? 0) * 0.10}%` }} 
                         className="bg-emerald-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
                       >
                         ATTN
                       </div>
                       <div 
-                        title={`Retention Contribution: ${(selectedCenterScores.studentRetentionScore * 0.30).toFixed(1)} pts`}
-                        style={{ width: `${(selectedCenterScores.studentRetentionScore * 0.30)}%` }} 
+                        title={`Retention Contribution: ${selectedCenterScores.studentRetentionScore !== null ? ((selectedCenterScores.studentRetentionScore ?? 0) * 0.30).toFixed(1) : "0.0"} pts`}
+                        style={{ width: `${(selectedCenterScores.studentRetentionScore ?? 0) * 0.30}%` }} 
                         className="bg-orange-400 flex items-center justify-center transition-all duration-300 min-w-[5%]"
                       >
                         RETD
@@ -5238,28 +5472,28 @@ export default function App() {
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 text-[10px] font-mono text-slate-400">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 bg-cyan-400 rounded-sm shrink-0" />
-                        <span>Subjective (25%): <strong className="text-slate-200">{(selectedCenterScores.subjectiveTestScore * 0.25).toFixed(1)}</strong></span>
+                        <span>Subjective (25%): <strong className="text-slate-200">{selectedCenterScores.subjectiveTestScore !== null ? ((selectedCenterScores.subjectiveTestScore ?? 0) * 0.25).toFixed(1) : "0.0"}</strong></span>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 bg-yellow-400 rounded-sm shrink-0" />
-                        <span>IOQM (20%): <strong className="text-slate-200">{(selectedCenterScores.ioqmScore * 0.20).toFixed(1)}</strong></span>
+                        <span>IOQM (20%): <strong className="text-slate-200">{selectedCenterScores.ioqmScore !== null ? ((selectedCenterScores.ioqmScore ?? 0) * 0.20).toFixed(1) : "0.0"}</strong></span>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 bg-purple-400 rounded-sm shrink-0" />
-                        <span>Ramp Up (15%): <strong className="text-slate-200">{(selectedCenterScores.rampUpScore * 0.15).toFixed(1)}</strong></span>
+                        <span>Ramp Up (15%): <strong className="text-slate-200">{selectedCenterScores.rampUpScore !== null ? ((selectedCenterScores.rampUpScore ?? 0) * 0.15).toFixed(1) : "0.0"}</strong></span>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 bg-emerald-400 rounded-sm shrink-0" />
-                        <span>Attendance (10%): <strong className="text-slate-200">{(selectedCenterScores.testAttendanceScore * 0.10).toFixed(1)}</strong></span>
+                        <span>Attendance (10%): <strong className="text-slate-200">{selectedCenterScores.testAttendanceScore !== null ? ((selectedCenterScores.testAttendanceScore ?? 0) * 0.10).toFixed(1) : "0.0"}</strong></span>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 bg-orange-400 rounded-sm shrink-0" />
-                        <span>Retention (30%): <strong className="text-slate-200">{(selectedCenterScores.studentRetentionScore * 0.30).toFixed(1)}</strong></span>
+                        <span>Retention (30%): <strong className="text-slate-200">{selectedCenterScores.studentRetentionScore !== null ? ((selectedCenterScores.studentRetentionScore ?? 0) * 0.30).toFixed(1) : "0.0"}</strong></span>
                       </div>
                     </div>
 
                     <p className="text-[10px] text-slate-500 italic text-center pt-1 border-t border-slate-800/60 font-mono">
-                      Dynamic Consolidated Equation: Subjective*0.25 + IOQM*0.20 + RampUp*0.15 + Attendance*0.10 + Retention*0.30 = {(selectedCenterScores.consolidatedScore).toFixed(1)} points
+                      Dynamic Consolidated Equation: Subjective*0.25 + IOQM*0.20 + RampUp*0.15 + Attendance*0.10 + Retention*0.30 = {safeFormatScore(selectedCenterScores.consolidatedScore)} points
                     </p>
                   </div>
                 </div>

@@ -38,18 +38,24 @@ export function isStudentPresentForTest(s: Student, testNum: 1 | 2): boolean {
 
 export function calculateTestAttendanceScore(centerStudents: Student[]) {
   const activeStudents = getActiveStudents(centerStudents);
+  const studentsWithAttendance = activeStudents.filter(s => 
+    s.t1_attendance === "Present" || 
+    s.t1_attendance === "Absent" || 
+    s.t2_attendance === "Present" || 
+    s.t2_attendance === "Absent"
+  );
 
-  if (activeStudents.length === 0) {
+  if (studentsWithAttendance.length === 0) {
     return {
-      attendance_percent: 0,
-      testAttendanceScore: 0
+      attendance_percent: null,
+      testAttendanceScore: null
     };
   }
 
   // Average attendance of active pool (dynamic based on 1 vs 2 tests)
   let totalAttendanceOpportunities = 0;
   let attendedCount = 0;
-  activeStudents.forEach(s => {
+  studentsWithAttendance.forEach(s => {
     const limit = s.test_count === 1 ? 1 : 2;
     totalAttendanceOpportunities += limit;
     if (isStudentPresentForTest(s, 1)) attendedCount++;

@@ -14,6 +14,30 @@ export function calculateSubjectiveTestScore(centerStudents: Student[]) {
     };
   }
 
+  // Check if any student in the center has actual scores defined
+  const studentsWithRealScores = centerStudents.filter(s => 
+    s.t1_scores && (
+      (s.t1_scores.physics !== undefined && s.t1_scores.physics !== null) || 
+      (s.t1_scores.chemistry !== undefined && s.t1_scores.chemistry !== null) || 
+      (s.t1_scores.maths !== undefined && s.t1_scores.maths !== null) ||
+      (s.t2_scores && (
+        (s.t2_scores.physics !== undefined && s.t2_scores.physics !== null) || 
+        (s.t2_scores.chemistry !== undefined && s.t2_scores.chemistry !== null) || 
+        (s.t2_scores.maths !== undefined && s.t2_scores.maths !== null)
+      ))
+    )
+  );
+
+  if (studentsWithRealScores.length === 0) {
+    return {
+      elementA_percent: null,
+      elementA_score: null,
+      elementB_percent: null,
+      elementB_score: null,
+      subjectiveTestScore: null
+    };
+  }
+
   // Element A: % of active students with test average >= 90%.
   let elementA_count = 0;
   let totalPapers = 0;
@@ -27,6 +51,16 @@ export function calculateSubjectiveTestScore(centerStudents: Student[]) {
     totalPapers += perf.subjectPapersCount;
     failingPapers += perf.failingPapersCount;
   });
+
+  if (totalPapers === 0) {
+    return {
+      elementA_percent: null,
+      elementA_score: null,
+      elementB_percent: null,
+      elementB_score: null,
+      subjectiveTestScore: null
+    };
+  }
 
   const elementA_percent = (elementA_count / activeStudents.length) * 100;
   // If >= 15% of students hit this, award 100 marks. If 0-15%, scale linearly.

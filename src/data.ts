@@ -798,19 +798,19 @@ export function calculateCenterMetrics(
       activeStudents: 0,
       region,
       combined_center,
-      subjectiveTestScore: 0,
-      elementA_percent: 0,
-      elementA_score: 0,
-      elementB_percent: 0,
-      elementB_score: 0,
-      testAttendanceScore: 0,
-      attendance_percent: 0,
-      ioqmScore: 0,
-      ioqm_percent: 0,
-      rampUpScore: 0,
-      rampUp_percent: 0,
-      studentRetentionScore: 0,
-      retention_percent: 0,
+      subjectiveTestScore: null,
+      elementA_percent: null,
+      elementA_score: null,
+      elementB_percent: null,
+      elementB_score: null,
+      testAttendanceScore: null,
+      attendance_percent: null,
+      ioqmScore: null,
+      ioqm_percent: null,
+      rampUpScore: null,
+      rampUp_percent: null,
+      studentRetentionScore: null,
+      retention_percent: null,
       consolidatedScore: 0
     };
   }
@@ -830,13 +830,34 @@ export function calculateCenterMetrics(
   // 5. Student Retention (Weight: 30%)
   const retention = calculateStudentRetentionScore(centerStudents);
 
-  // Calculate Consolidated Center Score
-  const consolidatedScore = 
-    (subjective.subjectiveTestScore * 0.25) +
-    (ioqm.ioqmScore * 0.20) +
-    (rampUp.rampUpScore * 0.15) +
-    (attendance.testAttendanceScore * 0.10) +
-    (retention.studentRetentionScore * 0.30);
+  // Calculate Consolidated Center Score by re-allocating weights dynamically for available metrics.
+  let weightedSum = 0;
+  let totalWeightUsed = 0;
+
+  if (subjective.subjectiveTestScore !== null && subjective.subjectiveTestScore !== undefined) {
+    weightedSum += subjective.subjectiveTestScore * 0.25;
+    totalWeightUsed += 0.25;
+  }
+  if (ioqm.ioqmScore !== null && ioqm.ioqmScore !== undefined) {
+    weightedSum += ioqm.ioqmScore * 0.20;
+    totalWeightUsed += 0.20;
+  }
+  if (rampUp.rampUpScore !== null && rampUp.rampUpScore !== undefined) {
+    weightedSum += rampUp.rampUpScore * 0.15;
+    totalWeightUsed += 0.15;
+  }
+  if (attendance.testAttendanceScore !== null && attendance.testAttendanceScore !== undefined) {
+    weightedSum += attendance.testAttendanceScore * 0.10;
+    totalWeightUsed += 0.10;
+  }
+  if (retention.studentRetentionScore !== null && retention.studentRetentionScore !== undefined) {
+    weightedSum += retention.studentRetentionScore * 0.30;
+    totalWeightUsed += 0.30;
+  }
+
+  const consolidatedScore = totalWeightUsed > 0 
+    ? (weightedSum / totalWeightUsed)
+    : 0;
 
   return {
     centerName,

@@ -4,17 +4,19 @@ import { getActiveStudents } from "./shared";
 export function calculateStudentRetentionScore(centerStudents: Student[]) {
   const activeStudents = getActiveStudents(centerStudents);
 
-  if (activeStudents.length === 0) {
+  const activeRetentionStudents = activeStudents.filter(s => s.retained !== undefined);
+
+  if (activeRetentionStudents.length === 0) {
     return {
-      retention_percent: 100,
-      studentRetentionScore: 100
+      retention_percent: null,
+      studentRetentionScore: null
     };
   }
 
   // % of retained pupils across active pool
-  const retainedCount = activeStudents.filter(s => s.retained).length;
-  const retention_percent = activeStudents.length > 0 
-    ? (retainedCount / activeStudents.length) * 100 
+  const retainedCount = activeRetentionStudents.filter(s => s.retained).length;
+  const retention_percent = activeRetentionStudents.length > 0 
+    ? (retainedCount / activeRetentionStudents.length) * 100 
     : 100;
 
   // <75% = 0; >=95% = 100; 75-95% linear scale
