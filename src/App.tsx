@@ -116,6 +116,19 @@ import {
   Radar,
 } from "recharts";
 
+// Helper utilities to check student presence correctly across plain "Present" / "Absent", percentages and ratios
+export function checkT1Present(s: Student): boolean {
+  if (s.t1_attendance === undefined || s.t1_attendance === null) return false;
+  const str = String(s.t1_attendance).trim().toLowerCase();
+  return str !== "absent" && str !== "a" && str !== "no" && str !== "0" && str !== "0%" && !str.startsWith("0/");
+}
+
+export function checkT2Present(s: Student): boolean {
+  if (s.t2_attendance === undefined || s.t2_attendance === null) return false;
+  const str = String(s.t2_attendance).trim().toLowerCase();
+  return str !== "absent" && str !== "a" && str !== "no" && str !== "0" && str !== "0%" && !str.startsWith("0/");
+}
+
 export default function App() {
   // --- STATES ---
   const [students, setStudents] = useState<Student[]>(PRELOADED_STUDENTS);
@@ -586,18 +599,18 @@ export default function App() {
     
     // Filter out double absent students
     const active = centerStudents.filter(
-      (s) => s.t1_attendance === "Present" || s.t2_attendance === "Present"
+      (s) => checkT1Present(s) || checkT2Present(s)
     );
 
     // Identify students with at least 1 failing paper in the 30% to 39% range
     const filtered = active.filter((s) => {
       const papers: number[] = [];
-      if (s.t1_attendance === "Present") {
+      if (checkT1Present(s)) {
         if (s.t1_scores.physics !== undefined) papers.push(s.t1_scores.physics);
         if (s.t1_scores.chemistry !== undefined) papers.push(s.t1_scores.chemistry);
         if (s.t1_scores.maths !== undefined) papers.push(s.t1_scores.maths);
       }
-      if (s.t2_attendance === "Present") {
+      if (checkT2Present(s)) {
         if (s.t2_scores.physics !== undefined) papers.push(s.t2_scores.physics);
         if (s.t2_scores.chemistry !== undefined) papers.push(s.t2_scores.chemistry);
         if (s.t2_scores.maths !== undefined) papers.push(s.t2_scores.maths);
@@ -998,7 +1011,7 @@ export default function App() {
   const actionablePlan = useMemo(() => {
     const centerStudents = selectedCenterStudents;
     const activeStudents = centerStudents.filter(
-      (s) => s.t1_attendance === "Present" || s.t2_attendance === "Present"
+      (s) => checkT1Present(s) || checkT2Present(s)
     );
 
     const activeCoachedIds = coachedStudentIds;
@@ -1050,16 +1063,16 @@ export default function App() {
     const getAbsentees = () => {
       const items: { student: Student; type: string; action: string }[] = [];
       activeStudents.forEach((s) => {
-        if (s.t1_attendance === "Absent") {
+        if (!checkT1Present(s)) {
           items.push({ student: s, type: "Absent on Test 1", action: "Missed Test 1! Contact to ensure presence in next test cycle." });
         }
-        if (s.t2_attendance === "Absent") {
+        if (!checkT2Present(s)) {
           items.push({ student: s, type: "Absent on Test 2", action: "Missed Test 2! Follow up on weekend test attendance." });
         }
       });
       // Also grab double absents from raw center list
       centerStudents.forEach((s) => {
-        if (s.t1_attendance === "Absent" && s.t2_attendance === "Absent") {
+        if (!checkT1Present(s) && !checkT2Present(s)) {
           items.push({ student: s, type: "Double Absent (Excluded)", action: "Highly At-Risk! Excluded from pool. Schedule critical direct consultation." });
         }
       });
@@ -1116,9 +1129,9 @@ export default function App() {
           let baseProb = isDefaulter ? 75 : 40;
           
           // Students active in tests are highly engaged and easier to retain
-          if (s.t1_attendance === "Present") baseProb += 10;
-          if (s.t2_attendance === "Present") baseProb += 10;
-          if (s.t1_attendance === "Absent" && s.t2_attendance === "Absent") baseProb -= 15;
+          if (checkT1Present(s)) baseProb += 10;
+          if (checkT2Present(s)) baseProb += 10;
+          if (!checkT1Present(s) && !checkT2Present(s)) baseProb -= 15;
           
           // Good academic performers are easier to counsel back to active status
           const perf = getStudentPerformance(s);
@@ -1344,8 +1357,8 @@ export default function App() {
       let rows = centerStudents.map(student => {
         const perf = getStudentPerformance(student);
         const isRetained = student.retained ? "Retained" : "Defaulter / Left";
-        const isT1Present = student.t1_attendance === "Present" ? "Present" : "Absent";
-        const isT2Present = student.t2_attendance === "Present" ? "Present" : "Absent";
+        const isT1Present = student.t1_attendance !== undefined ? student.t1_attendance : "Absent";
+        const isT2Present = student.t2_attendance !== undefined ? student.t2_attendance : "Absent";
         const avgScore = perf.isActive && perf.averagePercent !== null ? `${perf.averagePercent.toFixed(1)}%` : "N/A (Double Absent)";
         return `"${student.name}","${student.id}","${student.center}","${student.grade}","${isT1Present}","${isT2Present}","${avgScore}","${isRetained}"`;
       }).join("\n");
@@ -5108,8 +5121,8 @@ export default function App() {
                     <tbody className="divide-y divide-slate-800">
                       {paginatedPoolStudents.map((student) => {
                         const isCoached = coachedStudentIds.includes(student.id);
-                        const isT1Present = student.t1_attendance === "Present";
-                        const isT2Present = student.t2_attendance === "Present";
+                        const isT1Present = checkT1Present(student);
+                        const isT2Present = checkT2Present(student);
                         
                         // Grab evaluated average
                         let performance = getStudentPerformance(student);

@@ -160,11 +160,15 @@ export function parseSpreadsheetRowsToStudents(
     return isNaN(num) ? undefined : num;
   };
 
-  // Helper parser for attendance
-  const parseAttendance = (val: any): "Present" | "Absent" => {
-    const str = String(val || "").trim().toLowerCase();
+  // Helper parser for attendance that preserves percentages/fractions
+  const parseAttendance = (val: any): string => {
+    const rawStr = String(val || "").trim();
+    const str = rawStr.toLowerCase();
+    if (str === "") return "Absent";
     if (["present", "p", "yes", "y", "1", "present status", "true"].includes(str)) return "Present";
-    return "Absent";
+    if (["absent", "a", "no", "n", "0", "absent status", "false"].includes(str)) return "Absent";
+    // Otherwise keep the percentage like "100%", "50%" or fraction "2/4" as-is!
+    return rawStr;
   };
 
   // Helper parser for retention flag
@@ -452,30 +456,17 @@ export function parseSpreadsheetRowsToStudents(
       const t2Att = colIndex.t2_attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.t2_attendance)) : undefined;
       const genAtt = colIndex.attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.attendance)) : undefined;
 
-      // Extract ratio-based attendance (e.g., 2/4 means Present, 0/4 means Absent)
-      let parsedAttendanceStatus: "Present" | "Absent" | undefined = undefined;
+      // Extract raw or formatted user attendance values (e.g. 100%, 50%, 4/4) directly
+      let parsedAttendanceStatus: string | undefined = undefined;
       
       const testAttVal = colIndex.test_attendance >= 0 ? getCellValue(row, colIndex.test_attendance) : "";
       if (testAttVal !== "") {
-        const valNum = parseFloat(testAttVal.replace(/[^0-9.-]/g, ""));
-        if (!isNaN(valNum)) {
-          parsedAttendanceStatus = valNum > 0 ? "Present" : "Absent";
-        }
+        parsedAttendanceStatus = parseAttendance(testAttVal);
       }
       
       const totalSubVal = colIndex.total_subject >= 0 ? getCellValue(row, colIndex.total_subject) : "";
       if (totalSubVal !== "" && parsedAttendanceStatus === undefined) {
-        if (totalSubVal.includes("/")) {
-          const numSg = parseInt(totalSubVal.split("/")[0]);
-          if (!isNaN(numSg)) {
-            parsedAttendanceStatus = numSg > 0 ? "Present" : "Absent";
-          }
-        } else {
-          const numSg = parseInt(totalSubVal);
-          if (!isNaN(numSg)) {
-            parsedAttendanceStatus = numSg > 0 ? "Present" : "Absent";
-          }
-        }
+        parsedAttendanceStatus = parseAttendance(totalSubVal);
       }
 
       const finalStatus = parsedAttendanceStatus ?? genAtt;

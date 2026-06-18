@@ -1,4 +1,5 @@
 import { Student } from "../types";
+import { getStudentAttendanceWeight } from "./testAttendance";
 
 export function getStudentPerformance(student: Student): {
   isActive: boolean;
@@ -8,8 +9,8 @@ export function getStudentPerformance(student: Student): {
   papers: { name: string; score: number | undefined; test: 'T1'|'T2' }[];
 } {
   const isSingleTest = student.test_count === 1;
-  const isT1Present = student.t1_attendance === "Present";
-  const isT2Present = !isSingleTest && student.t2_attendance === "Present";
+  const isT1Present = getStudentAttendanceWeight(student, 1) > 0;
+  const isT2Present = !isSingleTest && getStudentAttendanceWeight(student, 2) > 0;
   
   // Rule A: Absence Exclusion (If single test, missing T1 means absent)
   if (!isT1Present && !isT2Present) {
@@ -68,6 +69,6 @@ export function getActiveStudents(centerStudents: Student[]): Student[] {
       return true;
     }
     const isSingleTest = s.test_count === 1;
-    return s.t1_attendance === "Present" || (!isSingleTest && s.t2_attendance === "Present");
+    return getStudentAttendanceWeight(s, 1) > 0 || (!isSingleTest && getStudentAttendanceWeight(s, 2) > 0);
   });
 }
