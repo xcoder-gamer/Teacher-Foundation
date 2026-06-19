@@ -43,9 +43,6 @@ interface DailyLedgerImporterProps {
   handleDownloadRampUpXLSX: () => void;
   selectedUploadMatrix: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup";
   setSelectedUploadMatrix: (format: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup") => void;
-  importMode: "overwrite" | "merge";
-  setImportMode: (mode: "overwrite" | "merge") => void;
-  handleForceRecalculate: () => Promise<void>;
   handleDrag: (e: React.DragEvent) => void;
   handleDrop: (e: React.DragEvent) => void;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -79,9 +76,6 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
   handleDownloadRampUpXLSX,
   selectedUploadMatrix,
   setSelectedUploadMatrix,
-  importMode,
-  setImportMode,
-  handleForceRecalculate,
   handleDrag,
   handleDrop,
   handleFileChange,
@@ -545,62 +539,6 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                   {selectedUploadMatrix === "attendance" && "Only updates presence/absence logs for Test 1 & Test 2 cycles. No scores or stats are modified!"}
                   {selectedUploadMatrix === "ioqm" && "Only matches registration number to update the IOQM achievement rate percentages."}
                   {selectedUploadMatrix === "rampup" && "Only matches registration number to update the Ramp Up test score percentages (9/10th grade only)."}
-                </div>
-
-                <div className="space-y-2 mt-3 pt-3 border-t border-slate-850/50">
-                  <label className="text-xs font-bold text-slate-200 flex items-center gap-2 font-display">
-                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-cyan-500/15 text-cyan-400 font-mono text-[10px] font-bold">1b</span>
-                    Choose Import Mode Strategy:
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setImportMode("overwrite")}
-                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer relative ${
-                        importMode === "overwrite"
-                          ? "bg-cyan-500/10 border-cyan-500/50 text-slate-100 shadow-md shadow-cyan-500/5"
-                          : "bg-slate-900/40 border-slate-800 hover:border-slate-700/80 text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      <div className="text-xs font-bold font-sans flex items-center gap-1.5">
-                        <Check className={`w-3.5 h-3.5 text-cyan-400 ${importMode === "overwrite" ? "opacity-100" : "opacity-0"}`} />
-                        Fresh Start (Overwrite)
-                      </div>
-                      <p className="text-[9.5px] text-slate-500 mt-1 leading-tight font-sans">
-                        Removes all older sandbox/demo student records. Recalculates metrics <strong>ONLY</strong> using this newly uploaded file.
-                      </p>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setImportMode("merge")}
-                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer relative ${
-                        importMode === "merge"
-                          ? "bg-cyan-500/10 border-cyan-500/50 text-slate-100 shadow-md shadow-cyan-500/5"
-                          : "bg-slate-900/40 border-slate-800 hover:border-slate-700/80 text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      <div className="text-xs font-bold font-sans flex items-center gap-1.5">
-                        <Check className={`w-3.5 h-3.5 text-cyan-400 ${importMode === "merge" ? "opacity-100" : "opacity-0"}`} />
-                        Merge & Update
-                      </div>
-                      <p className="text-[9.5px] text-slate-500 mt-1 leading-tight font-sans">
-                        Keeps currently loaded class list. Appends or updates matching students from this spreadsheet.
-                      </p>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-850/50 mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans">
-                  <span className="text-slate-400 text-[11px]">Sync calculations across all database records:</span>
-                  <button
-                    type="button"
-                    onClick={handleForceRecalculate}
-                    className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 border border-emerald-500/35 px-4 py-2 rounded-lg font-bold transition flex items-center justify-center gap-1.5 active:scale-98 cursor-pointer text-[11px] self-start sm:self-auto shadow-md"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-450" />
-                    <span>Sync & Force Recalculate</span>
-                  </button>
                 </div>
               </div>
 

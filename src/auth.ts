@@ -160,15 +160,11 @@ export function parseSpreadsheetRowsToStudents(
     return isNaN(num) ? undefined : num;
   };
 
-  // Helper parser for attendance that preserves percentages/fractions
-  const parseAttendance = (val: any): string => {
-    const rawStr = String(val || "").trim();
-    const str = rawStr.toLowerCase();
-    if (str === "") return "Absent";
+  // Helper parser for attendance
+  const parseAttendance = (val: any): "Present" | "Absent" => {
+    const str = String(val || "").trim().toLowerCase();
     if (["present", "p", "yes", "y", "1", "present status", "true"].includes(str)) return "Present";
-    if (["absent", "a", "no", "n", "0", "absent status", "false"].includes(str)) return "Absent";
-    // Otherwise keep the percentage like "100%", "50%" or fraction "2/4" as-is!
-    return rawStr;
+    return "Absent";
   };
 
   // Helper parser for retention flag
@@ -377,15 +373,10 @@ export function parseSpreadsheetRowsToStudents(
       stud.english_pct = englishScore ?? scienceScore ?? (hasAnyScore ? 75 : undefined);
       stud.science_pct = scienceScore ?? physicsVal;
 
-      // Detect test count based on total_marks, subject_total_marks, or availability of T2 columns
-      const hasT2ColumnsPr = colIndex.t2_attendance >= 0 || 
-                             colIndex.t2_physics >= 0 || 
-                             colIndex.t2_chemistry >= 0 || 
-                             colIndex.t2_maths >= 0;
-      let testCount = (hasT2ColumnsPr || isT2) ? 2 : 1;
-
+      // Detect test count based on total_marks and subject_total_marks
       const totalMarksVal = colIndex.total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.total_marks)) : undefined;
       const subjTotalMarksVal = colIndex.subject_total_marks >= 0 ? parsePercent(getCellValue(row, colIndex.subject_total_marks)) : undefined;
+      let testCount = 2; // Default to 2
       if (totalMarksVal !== undefined && subjTotalMarksVal !== undefined && totalMarksVal > 0) {
         if (Math.abs(totalMarksVal - subjTotalMarksVal) < 0.1) {
           testCount = 1;
@@ -456,17 +447,30 @@ export function parseSpreadsheetRowsToStudents(
       const t2Att = colIndex.t2_attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.t2_attendance)) : undefined;
       const genAtt = colIndex.attendance >= 0 ? parseAttendance(getCellValue(row, colIndex.attendance)) : undefined;
 
-      // Extract raw or formatted user attendance values (e.g. 100%, 50%, 4/4) directly
-      let parsedAttendanceStatus: string | undefined = undefined;
+      // Extract ratio-based attendance (e.g., 2/4 means Present, 0/4 means Absent)
+      let parsedAttendanceStatus: "Present" | "Absent" | undefined = undefined;
       
       const testAttVal = colIndex.test_attendance >= 0 ? getCellValue(row, colIndex.test_attendance) : "";
       if (testAttVal !== "") {
-        parsedAttendanceStatus = parseAttendance(testAttVal);
+        const valNum = parseFloat(testAttVal.replace(/[^0-9.-]/g, ""));
+        if (!isNaN(valNum)) {
+          parsedAttendanceStatus = valNum > 0 ? "Present" : "Absent";
+        }
       }
       
       const totalSubVal = colIndex.total_subject >= 0 ? getCellValue(row, colIndex.total_subject) : "";
       if (totalSubVal !== "" && parsedAttendanceStatus === undefined) {
-        parsedAttendanceStatus = parseAttendance(totalSubVal);
+        if (totalSubVal.includes("/")) {
+          const numSg = parseInt(totalSubVal.split("/")[0]);
+          if (!isNaN(numSg)) {
+            parsedAttendanceStatus = numSg > 0 ? "Present" : "Absent";
+          }
+        } else {
+          const numSg = parseInt(totalSubVal);
+          if (!isNaN(numSg)) {
+            parsedAttendanceStatus = numSg > 0 ? "Present" : "Absent";
+          }
+        }
       }
 
       const finalStatus = parsedAttendanceStatus ?? genAtt;
@@ -504,9 +508,6 @@ export function parseSpreadsheetRowsToStudents(
         }
       }
 
-      const hasT2Column = colIndex.t2_attendance >= 0;
-      const isSingleTest = !hasT2Column && !isT2;
-
       if (mergedMap.has(key)) {
         const stud = mergedMap.get(key)!;
         if (name && name !== `Student ${i}`) stud.name = name;
@@ -525,10 +526,9 @@ export function parseSpreadsheetRowsToStudents(
             stud.t1_attendance = finalStatus;
           }
         }
-        stud.test_count = isSingleTest ? 1 : 2;
       } else {
         const finalT1 = !isT2 ? (finalStatus ?? t1Att ?? "Present") : (t1Att ?? "Present");
-        const finalT2 = isSingleTest ? undefined : (isT2 ? (finalStatus ?? t2Att ?? "Present") : (t2Att ?? "Present"));
+        const finalT2 = isT2 ? (finalStatus ?? t2Att ?? "Present") : (t2Att ?? "Present");
 
         mergedMap.set(key, {
           id,
@@ -542,8 +542,7 @@ export function parseSpreadsheetRowsToStudents(
           retained: true,
           region: finalReg,
           combined_center: finalCombCenter,
-          batch: batValue || "11-NF101EA",
-          test_count: isSingleTest ? 1 : 2
+          batch: batValue || "11-NF101EA"
         });
       }
     }
