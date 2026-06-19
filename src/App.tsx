@@ -473,9 +473,6 @@ export default function App() {
         const cellPrefix = e.includes("@") ? e.split("@")[0] : e;
         if (cellPrefix === searchPrefix) return true;
 
-        // Substring check
-        if (e.includes(searchPrefix) || searchPrefix.includes(e)) return true;
-
         return false;
       });
     };
@@ -2380,13 +2377,13 @@ export default function App() {
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-sans">
             <span className="flex items-center gap-2 font-semibold">
               <AlertCircle className="w-4 h-4 shrink-0 text-yellow-500 animate-pulse" />
-              {(!googleUser || isSuperUser) ? (
+              {(!googleUser || isAdmin) ? (
                 <span>📊 <strong>DEMO MODE (Viewing Sample Test Data Only):</strong> Is samay aap preloaded test data dekh rahe hain. Apni real student file lagane ke liye right side me Excel (.xlsx) file upload karein ya connected Google Sheet use karein.</span>
               ) : (
                 <span>📊 <strong>DEMO MODE (Viewing Simulated Test Data Only):</strong> Is samay aap preloaded and simulated demonstration data dekh rahe hain. Apne centers ki real active dataset lagane ke liye supervisor ya core operations team se contact karein.</span>
               )}
             </span>
-            {(!googleUser || isSuperUser) && (
+            {(!googleUser || isAdmin) && (
               <div className="flex gap-2">
                 <button 
                   onClick={handleDownloadXLSXTemplate}
@@ -2428,9 +2425,9 @@ export default function App() {
         )}
         
         {/* GOOGLE SHEETS RIBBON CARDS */}
-        {isSuperUser && (
+        {isAdmin && (
           <section className={`lg:col-span-12 bg-slate-900 border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-300 ${
-            hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-800"
+            hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-805"
           }`} id="google-sheets-widget">
             <DailyLedgerImporter
               students={students}
@@ -2459,7 +2456,7 @@ export default function App() {
               handleDrop={handleDrop}
               handleFileChange={handleFileChange}
               setShowTemplateModal={setShowTemplateModal}
-              isAdmin={isSuperUser}
+              isAdmin={isAdmin}
               googleUser={googleUser}
               handleGoogleLogin={handleGoogleLogin}
               authError={authError}
