@@ -41,8 +41,8 @@ interface DailyLedgerImporterProps {
   handleDownloadAttendanceXLSX: () => void;
   handleDownloadIoqmXLSX: () => void;
   handleDownloadRampUpXLSX: () => void;
-  selectedUploadMatrix: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup";
-  setSelectedUploadMatrix: (format: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup") => void;
+  selectedUploadMatrix: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup" | "data_access";
+  setSelectedUploadMatrix: (format: "all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup" | "data_access") => void;
   importMode: "overwrite" | "merge";
   setImportMode: (mode: "overwrite" | "merge") => void;
   handleForceRecalculate: () => Promise<void>;
@@ -57,6 +57,8 @@ interface DailyLedgerImporterProps {
   setAuthError?: (err: string | null) => void;
   customAdmins?: string[];
   setCustomAdmins?: (admins: string[]) => void;
+  bypassAdminGating?: boolean;
+  onToggleBypass?: () => void;
 }
 
 export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
@@ -93,8 +95,10 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
   setAuthError,
   customAdmins = [],
   setCustomAdmins,
+  bypassAdminGating = false,
+  onToggleBypass,
 }) => {
-  const [selectedGuideFormat, setSelectedGuideFormat] = React.useState<"master" | "retention" | "results" | "attendance" | "ioqm" | "rampup">("master");
+  const [selectedGuideFormat, setSelectedGuideFormat] = React.useState<"master" | "retention" | "results" | "attendance" | "ioqm" | "rampup" | "data_access">("master");
   const [localCopied, setLocalCopied] = React.useState(false);
 
   // States for customizing Firebase connections and Admin email list
@@ -168,6 +172,7 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
     else if (selectedUploadMatrix === "attendance") setSelectedGuideFormat("attendance");
     else if (selectedUploadMatrix === "ioqm") setSelectedGuideFormat("ioqm");
     else if (selectedUploadMatrix === "rampup") setSelectedGuideFormat("rampup");
+    else if (selectedUploadMatrix === "data_access") setSelectedGuideFormat("data_access");
   }, [selectedUploadMatrix]);
 
   const handleLocalCopy = () => {
@@ -179,6 +184,12 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
       else if (selectedGuideFormat === "attendance") csv = generateAttendanceCSVTemplateString(students);
       else if (selectedGuideFormat === "ioqm") csv = generateIoqmCSVTemplateString(students);
       else if (selectedGuideFormat === "rampup") csv = generateRampUpCSVTemplateString(students);
+      else if (selectedGuideFormat === "data_access") {
+        csv = "Region,Combined_center,Center Name,CH Mail Id,RAH Mail ID,Regional Foundation Head Email Id,Foundation Head Email Id,Central\n" +
+              "Bihar+JH,Patna Vidyapeeth,Patna - Exhibition Rd Vidyapeeth,prabhakar.gautam@pw.live,atul.sinha@pw.live,manoj.kumar@pw.live,suman.kumar@pw.live,\"harpreet.singh1@pw.live, nitin.sharma2@pw.live\"\n" +
+              "Bihar+JH,Patna Vidyapeeth,Patna Boring Road Vidyapeeth,sharat.prakash@pw.live,atul.sinha@pw.live,manoj.kumar@pw.live,rajiv.ranjan1@pw.live,\"harpreet.singh1@pw.live, nitin.sharma2@pw.live\"\n" +
+              "Bihar+JH,Patna Vidyapeeth,Patna - Iskcon Vidyapeeth,anu.kumar@pw.live,atul.sinha@pw.live,manoj.kumar@pw.live,nishat.ahmad@pw.live,\"harpreet.singh1@pw.live, nitin.sharma2@pw.live\"";
+      }
 
       navigator.clipboard.writeText(csv);
       setLocalCopied(true);
@@ -210,6 +221,12 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
       } else if (selectedGuideFormat === "rampup") {
         csv = generateRampUpCSVTemplateString(students);
         filename = "pw_rampup_format5_sample.csv";
+      } else if (selectedGuideFormat === "data_access") {
+        csv = "Region,Combined_center,Center Name,CH Mail Id,RAH Mail ID,Regional Foundation Head Email Id,Foundation Head Email Id,Central\n" +
+              "Bihar+JH,Patna Vidyapeeth,Patna - Exhibition Rd Vidyapeeth,prabhakar.gautam@pw.live,atul.sinha@pw.live,manoj.kumar@pw.live,suman.kumar@pw.live,\"harpreet.singh1@pw.live, nitin.sharma2@pw.live\"\n" +
+              "Bihar+JH,Patna Vidyapeeth,Patna Boring Road Vidyapeeth,sharat.prakash@pw.live,atul.sinha@pw.live,manoj.kumar@pw.live,rajiv.ranjan1@pw.live,\"harpreet.singh1@pw.live, nitin.sharma2@pw.live\"\n" +
+              "Bihar+JH,Patna Vidyapeeth,Patna - Iskcon Vidyapeeth,anu.kumar@pw.live,atul.sinha@pw.live,manoj.kumar@pw.live,nishat.ahmad@pw.live,\"harpreet.singh1@pw.live, nitin.sharma2@pw.live\"";
+        filename = "pw_data_access_mapping_sample.csv";
       }
 
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -500,9 +517,21 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                   <div className="text-[10px] bg-rose-500/10 text-rose-450 text-rose-400 border border-rose-500/20 py-2 px-3 rounded font-mono break-all leading-tight">
                      Logged in as: <strong className="font-bold">{googleUser.email}</strong> (REJECTED)
                   </div>
-                  <p className="text-[10px] text-slate-500 leading-normal max-w-xs">
+                  <p className="text-[10px] text-slate-500 leading-normal max-w-xs font-sans">
                     View-Only access is active. Non-admin accounts can visualize results and download Excel reports, but cannot overwrite database state records.
                   </p>
+                </div>
+              )}
+
+              {onToggleBypass && (
+                <div className="pt-3 border-t border-slate-900/60 mt-2 w-full flex justify-center">
+                  <button
+                    onClick={onToggleBypass}
+                    type="button"
+                    className="bg-yellow-500/10 hover:bg-yellow-500/25 text-yellow-500 border border-yellow-500/30 px-4 py-2 rounded-lg text-[11px] font-sans font-bold transition cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
+                  >
+                    🔓 Simulated Dev Option: Bypass Gating & Upload Sheet
+                  </button>
                 </div>
               )}
             </div>
@@ -535,6 +564,7 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                   <option value="attendance">📅 Test Attendance Status (Format #3 - T1 & T2 Presence)</option>
                   <option value="ioqm">🏆 IOQM Olympiad Achievement Scores (Format #4)</option>
                   <option value="rampup">📈 Ramp Up Test Scores (Format #5 - Class 9/10 transition)</option>
+                  <option value="data_access">🔐 Data Access Restrictions (Only Mapped Emails Open - FH/RFH/Central)</option>
                 </select>
 
                 <div className="bg-slate-900 p-2.5 rounded border border-slate-850 text-[10px] leading-relaxed text-slate-300 font-mono">
@@ -545,6 +575,7 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                   {selectedUploadMatrix === "attendance" && "Only updates presence/absence logs for Test 1 & Test 2 cycles. No scores or stats are modified!"}
                   {selectedUploadMatrix === "ioqm" && "Only matches registration number to update the IOQM achievement rate percentages."}
                   {selectedUploadMatrix === "rampup" && "Only matches registration number to update the Ramp Up test score percentages (9/10th grade only)."}
+                  {selectedUploadMatrix === "data_access" && "Saves regional and center-level email address access maps so only designated mail IDs can access certain data!"}
                 </div>
 
                 <div className="space-y-2 mt-3 pt-3 border-t border-slate-850/50">
@@ -906,6 +937,21 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
               <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
               Format #5: Ramp Up Scores
             </button>
+
+            <button
+              onClick={() => {
+                setSelectedGuideFormat("data_access");
+                setLocalCopied(false);
+              }}
+              className={`px-3 py-2 text-xs font-semibold rounded-t-lg border-t border-x transition-all font-sans whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                selectedGuideFormat === "data_access"
+                  ? "bg-slate-900 border-slate-800 text-purple-400 font-bold border-b-2 border-b-purple-500/90"
+                  : "border-transparent text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+              🔑 Format #6: Data Access mapping
+            </button>
           </div>
 
           {/* MASTER COMBINED LEDGER CONTENT */}
@@ -968,17 +1014,17 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800">Aarav Sharma</td>
                         <td className="p-1 px-1 border-r border-slate-800 text-center font-bold text-cyan-400">11</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400 font-sans">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-emerald-400 font-semibold">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-emerald-400 font-semibold">Present</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-bold bg-slate-900/20">92</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-bold bg-slate-900/20">95</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-bold bg-slate-900/20">94</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-bold bg-slate-900/10">90</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-bold bg-slate-900/10">92</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-bold bg-slate-900/10">96</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-purple-400 font-semibold">82</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-3 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">92</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">95</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">94</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">90</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">92</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">96</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">82</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-3 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">3</td>
@@ -986,17 +1032,17 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800">Rahul Gupta</td>
                         <td className="p-1 px-1 border-r border-slate-800 text-center font-bold text-cyan-400">10</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400 font-sans">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-emerald-400 font-semibold">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-emerald-400 font-semibold">Present</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/20">55</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/20">34</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/20">45</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/10">58</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/10">42</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/10">48</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-purple-405 font-semibold text-purple-400">35</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-pink-400 font-semibold">55</td>
-                        <td className="p-1 px-3 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">55</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">34</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">45</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">58</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">42</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">48</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">35</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">55</td>
+                        <td className="p-1 px-3 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">4</td>
@@ -1004,17 +1050,17 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800">Sunita Yadav</td>
                         <td className="p-1 px-1 border-r border-slate-800 text-center font-bold text-cyan-400">12</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400 font-sans">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-emerald-400 font-semibold">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-emerald-400 font-semibold">Present</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/20">71</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/20">68</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/20">72</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/10">69</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/10">74</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center font-semibold bg-slate-900/10">70</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-purple-400 font-semibold">52</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-3 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">71</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">68</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">72</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">69</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">74</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">70</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">52</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-3 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">5</td>
@@ -1022,17 +1068,17 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800">Vikram Malhotra</td>
                         <td className="p-1 px-1 border-r border-slate-800 text-center font-bold text-cyan-400">9</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400 font-sans">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-rose-400 font-semibold">Absent</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center text-rose-400 font-semibold">Absent</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center text-slate-650 italic">blank</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center text-slate-650 italic">blank</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center text-slate-650 italic">blank</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center text-slate-650 italic">blank</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center text-slate-650 italic">blank</td>
-                        <td className="p-1 px-1 border-r border-slate-800 text-center text-slate-650 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-purple-400 font-semibold">20</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-pink-400 font-semibold">30</td>
-                        <td className="p-1 px-3 text-center text-rose-400 font-semibold">No</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-orange-100 text-orange-950">Absent</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center font-bold bg-orange-100 text-orange-950">Absent</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-1 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">20</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">30</td>
+                        <td className="p-1 px-3 text-center bg-orange-100 text-orange-950 font-bold">No</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1083,8 +1129,8 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800">Aarav Sharma</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">11</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-slate-500">Not Defaulter</td>
-                        <td className="p-1 px-3 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold bg-green-100 text-green-950">Not Defaulter</td>
+                        <td className="p-1 px-3 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">3</td>
@@ -1092,8 +1138,8 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800">Vikram Malhotra</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">9</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-rose-400">2nd EMI Defaulter</td>
-                        <td className="p-1 px-3 text-center text-rose-450 font-semibold">No</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-orange-100 text-orange-950 font-semibold">2nd EMI Defaulter</td>
+                        <td className="p-1 px-3 text-center bg-orange-100 text-orange-950 font-bold">No</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1146,23 +1192,23 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800 font-bold">2</td>
                         <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">PW-LKO-001</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-300">Aarav Sharma</td>
-                        <td className="p-1 px-2 border-r border-slate-800 bg-cyan-500/5 text-right font-mono">92</td>
-                        <td className="p-1 px-2 border-r border-slate-800 bg-cyan-500/5 text-right font-mono">90</td>
-                        <td className="p-1 px-2 border-r border-slate-800 bg-cyan-500/5 text-right font-mono">88</td>
-                        <td className="p-1 px-2 border-r border-slate-800 bg-cyan-500/5 text-right font-mono">94</td>
-                        <td className="p-1 px-2 border-r border-slate-800 bg-cyan-500/5 text-right font-mono">91</td>
-                        <td className="p-1 px-3 text-center text-emerald-400 font-bold">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">92</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">90</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">88</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">94</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">91</td>
+                        <td className="p-1 px-3 text-center bg-green-100 text-green-950 font-bold">Present</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800 font-bold">3</td>
                         <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">PW-LKO-004</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-300">Vikram Malhotra</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-3 text-center text-rose-400 font-bold">Absent</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-3 text-center bg-orange-100 text-orange-950 font-bold">Absent</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1207,15 +1253,15 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">2</td>
                         <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">PW-LKO-001</td>
                         <td className="p-1 px-2 border-r border-slate-800">Aarav Sharma</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
-                        <td className="p-1 px-3 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center bg-green-100 text-green-950 font-bold">Present</td>
+                        <td className="p-1 px-3 text-center bg-green-100 text-green-950 font-bold">Present</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">3</td>
                         <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">PW-LKO-004</td>
                         <td className="p-1 px-2 border-r border-slate-800">Vikram Malhotra</td>
-                        <td className="p-1 px-2 border-r border-slate-805 text-center font-semibold text-rose-400 bg-rose-500/5">Absent</td>
-                        <td className="p-1 px-3 text-center font-semibold text-rose-450 bg-rose-500/5">Absent</td>
+                        <td className="p-1 px-2 border-r border-slate-805 text-center bg-orange-100 text-orange-950 font-bold">Absent</td>
+                        <td className="p-1 px-3 text-center bg-orange-100 text-orange-950 font-bold">Absent</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1261,14 +1307,14 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">PW-LKO-001</td>
                         <td className="p-1 px-2 border-r border-slate-800">Aarav Sharma</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-3 text-right font-bold text-purple-400 bg-purple-500/5">82</td>
+                        <td className="p-1 px-3 text-center font-bold bg-green-100 text-green-950">82</td>
                       </tr>
                       <tr className="hover:bg-slate-900/40 text-slate-200">
                         <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">3</td>
                         <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">PW-LKO-002</td>
                         <td className="p-1 px-2 border-r border-slate-800">Rahul Gupta</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-3 text-right font-bold text-purple-400 bg-purple-500/5">35</td>
+                        <td className="p-1 px-3 text-center font-bold bg-orange-100 text-orange-950">35</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1317,7 +1363,76 @@ export const DailyLedgerImporter: React.FC<DailyLedgerImporterProps> = ({
                         <td className="p-1 px-2 border-r border-slate-800 whitespace-nowrap text-slate-200">Vikram Malhotra</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">9</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-slate-400 whitespace-nowrap">Lucknow Chowk Center</td>
-                        <td className="p-1 px-3 text-right font-bold text-purple-400 bg-purple-500/5">55</td>
+                        <td className="p-1 px-3 text-center font-bold bg-green-100 text-green-950">55</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: DATA ACCESS CONSTRAINTS (USER REQUEST REQUISITE) */}
+          {selectedGuideFormat === "data_access" && (
+            <div className="space-y-3 animate-fade-in font-sans">
+              <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-850 space-y-3">
+                <span className="text-xs font-mono font-bold text-slate-200 flex items-center gap-1.5 uppercase tracking-wider">
+                  <FileSpreadsheet className="w-4 h-4 text-purple-400" />
+                  Format #6: Data Access Constraints & Security Rules
+                </span>
+
+                <p className="text-[11.5px] text-slate-300 leading-normal font-sans">
+                  Saves specific Region, Combined Center, and Center level mapping rules to restrict viewing access by individual Gmail addresses.
+                </p>
+
+                <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950 shadow-inner">
+                  <table className="w-full text-[10px] md:text-[11px] font-mono border-collapse min-w-[1100px]">
+                    <thead className="bg-slate-900 text-slate-400 select-none border-b border-slate-800">
+                      <tr>
+                        <th className="w-10 bg-slate-950 border-r border-slate-800 text-[10px] text-center font-bold"></th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">A</th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">B</th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">C</th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">D</th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">E</th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">F</th>
+                        <th className="py-1 px-2 border-r border-slate-800 text-center font-semibold bg-slate-900/30">G</th>
+                        <th className="py-1 px-3 text-center font-semibold bg-slate-900/30">H</th>
+                      </tr>
+                      <tr className="bg-slate-900 text-yellow-500 border-b border-slate-800 font-bold font-mono">
+                        <td className="bg-slate-950 text-slate-500 text-center border-r border-slate-800 select-none font-bold">1</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 bg-yellow-500/5">Region</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 bg-yellow-500/5">Combined_center</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 text-cyan-400 bg-cyan-500/5">Center Name</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 text-rose-400 bg-rose-500/5">CH Mail Id</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 text-pink-400 bg-pink-500/5">RAH Mail ID</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 text-violet-400 bg-violet-500/5">Regional Foundation Head Email Id</td>
+                        <td className="py-1.5 px-2 border-r border-slate-800 text-orange-400 bg-orange-500/5">Foundation Head Email Id</td>
+                        <td className="py-1.5 px-3 text-emerald-400 bg-emerald-500/5">Central</td>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-850 text-slate-300 font-mono">
+                      <tr className="hover:bg-slate-900/40 text-slate-200">
+                        <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">2</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">Bihar+JH</td>
+                        <td className="p-1 px-2 border-r border-slate-800">Patna Vidyapeeth</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-cyan-400">Patna - Exhibition Rd Vidyapeeth</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-rose-400">prabhakar.gautam@pw.live</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-pink-400">atul.sinha@pw.live</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-violet-400">manoj.kumar@pw.live</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-orange-400">suman.kumar@pw.live</td>
+                        <td className="p-1 px-3 font-mono text-emerald-300">harpreet.singh1@pw.live, nitin.sharma2@pw.live</td>
+                      </tr>
+                      <tr className="hover:bg-slate-900/40 text-slate-200">
+                        <td className="bg-slate-950 text-slate-500 text-center select-none font-bold border-r border-slate-800">3</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-semibold text-slate-100">Bihar+JH</td>
+                        <td className="p-1 px-2 border-r border-slate-800">Patna Vidyapeeth</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-cyan-400">Patna Boring Road Vidyapeeth</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-rose-400">sharat.prakash@pw.live</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-pink-400">atul.sinha@pw.live</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-violet-400">manoj.kumar@pw.live</td>
+                        <td className="p-1 px-2 border-r border-slate-800 font-mono text-orange-400">rajiv.ranjan1@pw.live</td>
+                        <td className="p-1 px-3 font-mono text-emerald-300">harpreet.singh1@pw.live, nitin.sharma2@pw.live</td>
                       </tr>
                     </tbody>
                   </table>

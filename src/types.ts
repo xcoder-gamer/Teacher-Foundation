@@ -79,3 +79,15 @@ export interface CenterScores {
   // Final composite (out of 100)
   consolidatedScore: number;
 }
+
+export interface DataAccessRule {
+  region: string;
+  combined_center: string;
+  center: string;
+  ch_mailid: string;
+  rah_mailid: string;
+  rfh_mailid: string;
+  fh_mailid: string;
+  central_mailid: string;
+}
+

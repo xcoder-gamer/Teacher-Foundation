@@ -16,7 +16,9 @@ import {
   auth,
   googleSignIn,
   logout,
+  parseDataAccessSpreadsheet,
 } from "./auth";
+import { DataAccessRule } from "./types";
 import { onAuthStateChanged } from "firebase/auth";
 import { DailyLedgerImporter } from "./components/DailyLedgerImporter";
 import { collection, getDocs, doc, setDoc, writeBatch, getDoc } from "firebase/firestore";
@@ -156,7 +158,8 @@ export default function App() {
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importError, setImportError] = useState<string>("");
   const [hasImportedData, setHasImportedData] = useState<boolean>(false);
-  const [selectedUploadMatrix, setSelectedUploadMatrix] = useState<"all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup">("all");
+  const [selectedUploadMatrix, setSelectedUploadMatrix] = useState<"all" | "retention" | "subjective" | "attendance" | "ioqm" | "rampup" | "data_access">("all");
+  const [dataAccessRules, setDataAccessRules] = useState<DataAccessRule[]>([]);
   const [importMode, setImportMode] = useState<"overwrite" | "merge">("overwrite");
   
   const [showTemplateModal, setShowTemplateModal] = useState<boolean>(true);
@@ -230,24 +233,41 @@ export default function App() {
   };
 
   const handlePasscodeLogin = () => {
-    if (passcode.toLowerCase() === "admin") {
+    const cleanPasscode = passcode.trim().toLowerCase();
+    if (cleanPasscode === "admin") {
       setGoogleUser({
         email: "gurukul.ops@pw.live",
         displayName: "Demo Administrator",
         photoURL: ""
       });
       setPasscodeError("");
-    } else if (passcode.toLowerCase() === "viewer") {
+    } else if (cleanPasscode === "viewer") {
       setGoogleUser({
         email: "guest.viewer@pw.live",
         displayName: "Guest Educator",
         photoURL: ""
       });
       setPasscodeError("");
-    } else if (passcode.trim() !== "") {
-      setPasscodeError("Invalid demo passcode. Try 'admin'.");
+    } else if (cleanPasscode.includes("@") || cleanPasscode.includes(".")) {
+      // Direct simulation of a custom email (e.g. aditi.wadhwa@pw.live)
+      const simulatedEmail = cleanPasscode.includes("@") ? cleanPasscode : `${cleanPasscode}@pw.live`;
+      setGoogleUser({
+        email: simulatedEmail,
+        displayName: `Simulated User (${simulatedEmail.split("@")[0]})`,
+        photoURL: ""
+      });
+      setPasscodeError("");
+    } else if (cleanPasscode !== "") {
+      // Auto-append @pw.live domain for simple prefixes (e.g. aditi.wadhwa -> aditi.wadhwa@pw.live)
+      const simulatedEmail = `${cleanPasscode}@pw.live`;
+      setGoogleUser({
+        email: simulatedEmail,
+        displayName: `Simulated User (${cleanPasscode})`,
+        photoURL: ""
+      });
+      setPasscodeError("");
     } else {
-      setPasscodeError("Please enter a passcode.");
+      setPasscodeError("Please enter a passcode or simulated email.");
     }
   };
 
@@ -273,6 +293,13 @@ export default function App() {
     lowercaseEmail.startsWith("sharma.devansh") ||
     lowercaseEmail.startsWith("gurukul.ops") ||
     customAdmins.some(email => email.toLowerCase() === lowercaseEmail);
+
+  // Local sandbox override state to allow custom metrics/sheets upload as any simulated user
+  const [bypassAdminGating, setBypassAdminGating] = useState<boolean>(() => {
+    return localStorage.getItem("bypass_admin_gating") === "true";
+  });
+
+  const isSuperUser = isAdmin || bypassAdminGating;
 
   // Track if initial load from Firebase Firestore is completed
   const [isInitialLoadDone, setIsInitialLoadDone] = useState<boolean>(false);
@@ -324,6 +351,21 @@ export default function App() {
         } catch (metaErr) {
           console.warn("Could not read meta status, falling back to parsed lengths check", metaErr);
         }
+
+        // Fetch Data Access rules from Firestore
+        let rules: DataAccessRule[] = [];
+        try {
+          const rulesSnap = await getDocs(collection(db, "data_access_rules"));
+          rulesSnap.forEach((docSnap) => {
+            const data = docSnap.data();
+            if (data && Array.isArray(data.rules)) {
+              rules.push(...data.rules);
+            }
+          });
+        } catch (rulesErr) {
+          console.warn("Could not read data_access_rules collection", rulesErr);
+        }
+        setDataAccessRules(rules);
 
         let loadedCenter = "Lucknow Chowk Centre";
         if (parsed.length > 0) {
@@ -398,10 +440,111 @@ export default function App() {
     setAiError("");
   }, [selectedCenterName]);
 
+  // Derived state: filtered students matching the current user's data access authorization rules
+  const accessibleStudents = useMemo(() => {
+    // If there are no data access rules configured in the system: Anyone has access to everything.
+    if (!dataAccessRules || dataAccessRules.length === 0) {
+      return students;
+    }
+
+    const userEmail = googleUser?.email?.toLowerCase() || "";
+    if (!userEmail) {
+      // If there are rules, but no user is logged in:
+      if (isAdmin) {
+        return students;
+      }
+      return [];
+    }
+
+    const isEmailMatched = (cellText: string, searchEmail: string): boolean => {
+      if (!cellText || !searchEmail) return false;
+      const cleanSearch = searchEmail.trim().toLowerCase();
+      const searchPrefix = cleanSearch.includes("@") ? cleanSearch.split("@")[0] : cleanSearch;
+
+      const emails = cellText.split(/[,;\s]+/).map(e => e.trim().toLowerCase());
+      return emails.some(e => {
+        if (!e) return false;
+        // Exact match
+        if (e === cleanSearch) return true;
+        
+        // Handle prefix match: e.g. if the cell has just "aditi.wadhwa" and logged-in user is "aditi.wadhwa@pw.live"
+        const cellPrefix = e.includes("@") ? e.split("@")[0] : e;
+        if (cellPrefix === searchPrefix) return true;
+
+        // Substring check
+        if (e.includes(searchPrefix) || searchPrefix.includes(e)) return true;
+
+        return false;
+      });
+    };
+    
+    const userRules = dataAccessRules.filter(r => 
+      isEmailMatched(r.ch_mailid, userEmail) ||
+      isEmailMatched(r.rah_mailid, userEmail) ||
+      isEmailMatched(r.rfh_mailid, userEmail) ||
+      isEmailMatched(r.fh_mailid, userEmail) ||
+      isEmailMatched(r.central_mailid, userEmail)
+    );
+
+    if (userRules.length === 0) {
+      // If there are data access rules in the system, but the current user's email is not listed in any of them,
+      // and they are a global administrator, let them see everything.
+      if (isAdmin) {
+        return students;
+      }
+      return [];
+    }
+
+    return students.filter(s => {
+      const { region: sRegion, combined_center: sCombined } = getStudentRegionAndCombinedCenter(s);
+      const sCenter = s.center;
+
+      return userRules.some(rule => {
+        let isMatch = true;
+        if (rule.center && rule.center.trim() !== "" && rule.center.toLowerCase() !== "all") {
+          isMatch = isMatch && (sCenter.toLowerCase() === rule.center.toLowerCase() || sCenter.toLowerCase().includes(rule.center.toLowerCase().trim()));
+        }
+        if (rule.combined_center && rule.combined_center.trim() !== "" && rule.combined_center.toLowerCase() !== "all") {
+          isMatch = isMatch && (sCombined.toLowerCase() === rule.combined_center.toLowerCase() || sCombined.toLowerCase().includes(rule.combined_center.toLowerCase().trim()));
+        }
+        if (rule.region && rule.region.trim() !== "" && rule.region.toLowerCase() !== "all") {
+          isMatch = isMatch && (sRegion.toLowerCase() === rule.region.toLowerCase() || sRegion.toLowerCase().includes(rule.region.toLowerCase().trim()));
+        }
+        return isMatch;
+      });
+    });
+  }, [students, dataAccessRules, googleUser, isAdmin]);
+
+  // Auto-adjust selectedCenterName, regionFilter, and combinedCenterFilter when accessibleStudents list updates
+  useEffect(() => {
+    if (!isInitialLoadDone || accessibleStudents.length === 0) return;
+    
+    const validCenters = new Set(accessibleStudents.map(s => s.center));
+    const isCurrentCenterValid = selectedCenterName === "All Centers Combined" || validCenters.has(selectedCenterName);
+    
+    if (!isCurrentCenterValid) {
+      if (accessibleStudents.length > 0) {
+        setSelectedCenterName(accessibleStudents[0].center);
+      } else {
+        setSelectedCenterName("All Centers Combined");
+      }
+    }
+
+    const validRegions = new Set(accessibleStudents.map(s => getStudentRegionAndCombinedCenter(s).region));
+    if (regionFilter !== "All" && !validRegions.has(regionFilter)) {
+      setRegionFilter("All");
+    }
+
+    const validCombined = new Set(accessibleStudents.map(s => getStudentRegionAndCombinedCenter(s).combined_center));
+    if (combinedCenterFilter !== "All" && !validCombined.has(combinedCenterFilter)) {
+      setCombinedCenterFilter("All");
+    }
+  }, [accessibleStudents, selectedCenterName, regionFilter, combinedCenterFilter, isInitialLoadDone]);
+
   // --- RECALCULATION PIPELINE ---
   // Apply "What-If" coaching simulations to student marks in real-time
   const simulatedStudents = useMemo(() => {
-    return students.map((s) => {
+    return accessibleStudents.map((s) => {
       if (coachedStudentIds.includes(s.id)) {
         // Build simulated student with all failing papers boosted to 40% (pass line)
         const updatedT1 = { ...s.t1_scores };
@@ -452,7 +595,7 @@ export default function App() {
       }
       return s;
     });
-  }, [students, coachedStudentIds]);
+  }, [accessibleStudents, coachedStudentIds]);
 
   // Calculate dynamic ranking of centers based on current simulation state
   const rankedCenters = useMemo(() => {
@@ -485,8 +628,8 @@ export default function App() {
   }, [simulatedStudents]);
 
   const nationalBaselineMetrics = useMemo(() => {
-    return calculateCenterMetrics("All Centers Combined", students);
-  }, [students]);
+    return calculateCenterMetrics("All Centers Combined", accessibleStudents);
+  }, [accessibleStudents]);
 
   // Find the currently selected center's simulated and default scores
   const selectedCenterScores = useMemo(() => {
@@ -501,8 +644,8 @@ export default function App() {
 
   // Get raw baseline scores (without simulation) to compare
   const baselineCenters = useMemo(() => {
-    return getRankedMetricGroups(students, leaderboardLevel);
-  }, [students, leaderboardLevel]);
+    return getRankedMetricGroups(accessibleStudents, leaderboardLevel);
+  }, [accessibleStudents, leaderboardLevel]);
 
   const selectedCenterBaseline = useMemo(() => {
     if (selectedCenterName === "All Centers Combined") {
@@ -562,9 +705,9 @@ export default function App() {
   // Filtered active students matching the currently selected entity / hierarchy level
   const selectedCenterStudents = useMemo(() => {
     if (selectedCenterName === "All Centers Combined") {
-      return students;
+      return accessibleStudents;
     }
-    return students.filter(s => {
+    return accessibleStudents.filter(s => {
       const { region, combined_center } = getStudentRegionAndCombinedCenter(s);
       if (leaderboardLevel === "region") {
         return region === selectedCenterName;
@@ -574,7 +717,7 @@ export default function App() {
         return s.center === selectedCenterName;
       }
     });
-  }, [students, selectedCenterName, leaderboardLevel]);
+  }, [accessibleStudents, selectedCenterName, leaderboardLevel]);
 
   // Filtered simulated student list matching the selected entity / hierarchy level
   const simulatedSelectedCenterStudents = useMemo(() => {
@@ -683,15 +826,15 @@ export default function App() {
 
   // --- DYNAMIC REGIONS & COMBINED CENTERS FROM STUDENTS ---
   const allRegions = useMemo(() => {
-    const list = students.map(s => {
+    const list = accessibleStudents.map(s => {
       const { region } = getStudentRegionAndCombinedCenter(s);
       return region;
     });
     return ["All", ...Array.from(new Set(list)).filter(Boolean).sort()];
-  }, [students]);
+  }, [accessibleStudents]);
 
   const allCombinedCenters = useMemo(() => {
-    const filteredStudents = students.filter(s => {
+    const filteredStudents = accessibleStudents.filter(s => {
       if (regionFilter === "All") return true;
       const { region } = getStudentRegionAndCombinedCenter(s);
       return region === regionFilter;
@@ -701,7 +844,7 @@ export default function App() {
       return combined_center;
     });
     return ["All", ...Array.from(new Set(list)).filter(Boolean).sort()];
-  }, [students, regionFilter]);
+  }, [accessibleStudents, regionFilter]);
 
   const activeMetricList = useMemo(() => {
     let list = [];
@@ -1443,7 +1586,7 @@ export default function App() {
       });
       await chunkBatch.commit();
 
-      // 2. Wipe legacy students collection in 400-doc sub-batches
+          // 2. Wipe legacy students collection in 400-doc sub-batches
       const qSnap = await getDocs(collection(db, "students"));
       let batch = writeBatch(db);
       let count = 0;
@@ -1459,6 +1602,15 @@ export default function App() {
       if (count > 0) {
         await batch.commit();
       }
+
+      // 3. Wipe and reset custom data access rules safely
+      const rulesSnap = await getDocs(collection(db, "data_access_rules"));
+      const rulesBatch = writeBatch(db);
+      rulesSnap.docs.forEach((docSnap) => {
+        rulesBatch.delete(docSnap.ref);
+      });
+      await rulesBatch.commit();
+      setDataAccessRules([]);
       
       await setDoc(doc(db, "meta", "status"), {
         hasImportedData: true,
@@ -1590,6 +1742,33 @@ export default function App() {
       
       if (!rows || rows.length < 2) {
         throw new Error("The selected file is empty or missing headers.");
+      }
+
+      if (selectedUploadMatrix === "data_access") {
+        const parsedRules = parseDataAccessSpreadsheet(rows);
+        if (parsedRules.length === 0) {
+          throw new Error("Could not extract any valid access rules. Columns must be exactly: Region, Combined_center, Center, FH Mailid, RFH MailID, Central Mailid");
+        }
+
+        setDataAccessRules(parsedRules);
+
+        try {
+          const ruleSnap = await getDocs(collection(db, "data_access_rules"));
+          const ruleBatch = writeBatch(db);
+          ruleSnap.docs.forEach((docSnap) => {
+            ruleBatch.delete(docSnap.ref);
+          });
+          await ruleBatch.commit();
+
+          await setDoc(doc(db, "data_access_rules", "current"), {
+            rules: parsedRules,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (dbErr) {
+          console.error("Firestore persistence failure for data_access_rules", dbErr);
+          throw new Error("Local parsing succeeded but failed to sync rules to Firebase: " + (dbErr as any).message);
+        }
+        return;
       }
 
       const useExistingList = importMode === "merge" && hasImportedData;
@@ -2071,18 +2250,18 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Demo admin Bypass Passcode */}
+               {/* Demo admin Bypass Passcode */}
               <div className="bg-slate-950/40 p-5 rounded-xl border border-slate-800/60 space-y-3">
                 <h4 className="text-[11px] font-bold font-mono text-yellow-500 uppercase tracking-widest flex items-center gap-1">
-                  <Shield className="w-3.5 h-3.5 text-yellow-550 mr-1" /> Demo Admin Access
+                  <Shield className="w-3.5 h-3.5 text-yellow-550 mr-1" /> Demo Admin & User Simulator
                 </h4>
                 <p className="text-[10px] text-slate-400 leading-relaxed">
-                  Type <code>admin</code> (demo credentials) to unlock all charts, data importers, and academic diagnostics.
+                  Type <code>admin</code> to unlock everything, or type any team member's name/email (e.g. <code>aditi.wadhwa</code>) to preview exactly what they see!
                 </p>
-                <div className="flex gap-2">
+                <div className="flex gap-2 font-sans">
                   <input
-                    type="password"
-                    placeholder="Enter passcode..."
+                    type="text"
+                    placeholder="Enter passcode or email (e.g. aditi.wadhwa)..."
                     value={passcode}
                     onChange={(e) => {
                       setPasscode(e.target.value);
@@ -2159,6 +2338,23 @@ export default function App() {
                   }`}>
                     {isAdmin ? "Admin" : "Viewer"}
                   </span>
+                  {!isAdmin && (
+                    <button
+                      onClick={() => {
+                        const nextVal = !bypassAdminGating;
+                        setBypassAdminGating(nextVal);
+                        localStorage.setItem("bypass_admin_gating", String(nextVal));
+                      }}
+                      className={`text-[9.5px] px-2 py-0.5 rounded font-sans font-bold border cursor-pointer transition active:scale-95 ${
+                        bypassAdminGating
+                          ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/30"
+                          : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750"
+                      }`}
+                      title={bypassAdminGating ? "Click to lock and simulate read-only access" : "Click to unlock write mode to add metrics/sheet data"}
+                    >
+                      {bypassAdminGating ? "🔓 Upload Override: ON" : "🔒 Read-only (Unlock)"}
+                    </button>
+                  )}
                 </div>
                 <button
                   onClick={handleDisconnectGoogle}
@@ -2182,16 +2378,22 @@ export default function App() {
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-sans">
             <span className="flex items-center gap-2 font-semibold">
               <AlertCircle className="w-4 h-4 shrink-0 text-yellow-500 animate-pulse" />
-              <span>📊 <strong>DEMO MODE (Viewing Sample Test Data Only):</strong> Is samay aap preloaded test data dekh rahe hain. Apni real student file lagane ke liye right side me Excel (.xlsx) file upload karein ya connected Google Sheet use karein.</span>
+              {(!googleUser || isSuperUser) ? (
+                <span>📊 <strong>DEMO MODE (Viewing Sample Test Data Only):</strong> Is samay aap preloaded test data dekh rahe hain. Apni real student file lagane ke liye right side me Excel (.xlsx) file upload karein ya connected Google Sheet use karein.</span>
+              ) : (
+                <span>📊 <strong>DEMO MODE (Viewing Simulated Test Data Only):</strong> Is samay aap preloaded and simulated demonstration data dekh rahe hain. Apne centers ki real active dataset lagane ke liye supervisor ya core operations team se contact karein.</span>
+              )}
             </span>
-            <div className="flex gap-2">
-              <button 
-                onClick={handleDownloadXLSXTemplate}
-                className="bg-yellow-500/20 hover:bg-yellow-500/35 text-yellow-400 font-bold px-3 py-1 rounded border border-yellow-500/30 transition text-[11px] cursor-pointer"
-              >
-                📥 Download Excel Template (.xlsx)
-              </button>
-            </div>
+            {(!googleUser || isSuperUser) && (
+              <div className="flex gap-2">
+                <button 
+                  onClick={handleDownloadXLSXTemplate}
+                  className="bg-yellow-500/20 hover:bg-yellow-500/35 text-yellow-400 font-bold px-3 py-1 rounded border border-yellow-500/30 transition text-[11px] cursor-pointer"
+                >
+                  📥 Download Excel Template (.xlsx)
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2199,8 +2401,32 @@ export default function App() {
       {/* MAIN LAYOUT CONTAINER */}
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6" id="dashboard-main">
         
+        {googleUser && accessibleStudents.length === 0 && (
+          <div className="lg:col-span-12 bg-rose-500/11 border border-rose-500/30 rounded-xl p-5 text-rose-300 font-sans space-y-3">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 shrink-0 text-rose-400 mt-0.5 animate-pulse" />
+              <div>
+                <h3 className="font-bold text-slate-100 text-sm">🚫 Restricted Data Access Alert</h3>
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  Your signed-in account (<strong className="text-rose-400">{googleUser.email}</strong>) is currently active, 
+                  but the system has <strong className="text-rose-400">Restricted Data Access Mappings</strong> enabled, and 
+                  this email is not mapped to any active region or center.
+                </p>
+                <div className="mt-3 bg-slate-950/70 p-3 rounded-lg border border-rose-500/20 text-xs font-mono text-slate-300">
+                  <span className="text-slate-400">How to fix this:</span>
+                  <ul className="list-disc list-inside mt-1.5 space-y-1 text-slate-300">
+                    <li>Ensure you logged in with the correct email ID mapped in your center's sheet.</li>
+                    <li>The admin must add your email (<code className="text-yellow-400">{googleUser.email}</code>) in the <strong className="text-white">Data Access Restrictions</strong> Excel template and upload it.</li>
+                    <li>If you are trying to test in a sandbox/development environment, type your email (or <code className="text-yellow-400">admin</code>) directly into the <strong className="text-white">Demo Admin & User Simulator</strong> passcode box of the sign-in widget.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
         {/* GOOGLE SHEETS RIBBON CARDS */}
-        {(!googleUser || isAdmin) && (
+        {true && (
           <section className={`lg:col-span-12 bg-slate-900 border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-300 ${
             hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-800"
           }`} id="google-sheets-widget">
@@ -2231,13 +2457,19 @@ export default function App() {
               handleDrop={handleDrop}
               handleFileChange={handleFileChange}
               setShowTemplateModal={setShowTemplateModal}
-              isAdmin={isAdmin}
+              isAdmin={isSuperUser}
               googleUser={googleUser}
               handleGoogleLogin={handleGoogleLogin}
               authError={authError}
               setAuthError={setAuthError}
               customAdmins={customAdmins}
               setCustomAdmins={setCustomAdmins}
+              bypassAdminGating={bypassAdminGating}
+              onToggleBypass={() => {
+                const nextVal = !bypassAdminGating;
+                setBypassAdminGating(nextVal);
+                localStorage.setItem("bypass_admin_gating", String(nextVal));
+              }}
             />
           </section>
         )}
@@ -2673,17 +2905,17 @@ export default function App() {
                         <td className="p-1 px-2 border-r border-slate-800">Aarav Sharma</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">11</td>
                         <td className="p-1 px-2 border-r border-slate-800 whitespace-nowrap text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">92</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">95</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">94</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">90</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">92</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">96</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-purple-400/90">82</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">92</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">95</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">94</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">90</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">92</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">96</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">82</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       {/* Row 3: Borderline Case with Ramp Up (10th) */}
                       <tr className="hover:bg-slate-900/40 text-slate-200">
@@ -2692,17 +2924,17 @@ export default function App() {
                         <td className="p-1 px-2 border-r border-slate-800">Rahul Gupta</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">10</td>
                         <td className="p-1 px-2 border-r border-slate-800 whitespace-nowrap text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">55</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">34</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">45</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">58</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">42</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">48</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-purple-400/90">35</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-purple-400 bg-purple-500/5">55</td>
-                        <td className="p-1 px-2 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">55</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">34</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">45</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">58</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">42</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">48</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">35</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">55</td>
+                        <td className="p-1 px-2 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       {/* Row 4: Single Absent evaluated from remaining test (Rule B) */}
                       <tr className="hover:bg-slate-900/40 text-slate-200">
@@ -2711,17 +2943,17 @@ export default function App() {
                         <td className="p-1 px-2 border-r border-slate-800">Rohan Kapoor</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">11</td>
                         <td className="p-1 px-2 border-r border-slate-800 whitespace-nowrap text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-emerald-400 bg-emerald-500/5">Present</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-rose-400 bg-rose-500/5 anim-pulse">Absent</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">82</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">78</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-cyan-400/90">81</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-purple-400/90">65</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 text-center text-emerald-400 font-semibold">Yes</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-green-100 text-green-950">Present</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-orange-100 text-orange-950 anim-pulse">Absent</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">82</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">78</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">81</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-green-100 text-green-950">65</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 text-center bg-green-100 text-green-950 font-bold">Yes</td>
                       </tr>
                       {/* Row 5: Double Absent completely excluded from center metrics denominator (Rule A) */}
                       <tr className="hover:bg-slate-900/40 text-slate-200">
@@ -2730,17 +2962,17 @@ export default function App() {
                         <td className="p-1 px-2 border-r border-slate-800">Vikram Malhotra</td>
                         <td className="p-1 px-2 border-r border-slate-800 text-center font-bold text-cyan-400">9</td>
                         <td className="p-1 px-2 border-r border-slate-800 whitespace-nowrap text-slate-400">Lucknow Chowk Centre</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-rose-400 bg-rose-500/5">Absent</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center font-semibold text-rose-400 bg-rose-500/5">Absent</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-center text-slate-600 italic">blank</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-purple-400/90">20</td>
-                        <td className="p-1 px-2 border-r border-slate-800 text-right font-mono text-purple-400 bg-purple-500/5">30</td>
-                        <td className="p-1 px-2 text-center text-rose-450 font-semibold">No</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-orange-100 text-orange-950">Absent</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-bold bg-orange-100 text-orange-950">Absent</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center bg-white text-slate-900 font-bold font-sans">blank</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">20</td>
+                        <td className="p-1 px-2 border-r border-slate-800 text-center font-mono font-bold bg-orange-100 text-orange-950">30</td>
+                        <td className="p-1 px-2 text-center bg-orange-100 text-orange-950 font-bold">No</td>
                       </tr>
                     </tbody>
                   </table>

@@ -16,6 +16,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // 2.6. Custom Data Access Rules collection match block
+    match /data_access_rules/{documentId} {
+      allow read, write: if true;
+    }
+
+    // 2.7. Custom Meta status collection match block
+    match /meta/{documentId} {
+      allow read, write: if true;
+    }
+
     // 3. Custom Coaching collection match block
     match /coaching/{documentId} {
       allow read, write: if true;

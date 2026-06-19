@@ -2,7 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import defaultFirebaseConfig from "../firebase-applet-config.json";
-import { Student, SubjectScores } from "./types";
+import { Student, SubjectScores, DataAccessRule } from "./types";
 
 // Load custom firebase configurations if configured by the user
 const getActiveFirebaseConfig = () => {
@@ -323,9 +323,10 @@ export function parseSpreadsheetRowsToStudents(
                    (testNameLower.includes("2") && !testNameLower.includes("term 1") && !testNameLower.includes("term i"));
 
       // Attendance check
-      const attStr = getCellValue(row, colIndex.attendance).toLowerCase();
-      const isAbsent = attStr.includes("absent") || attStr.includes("rescheduled") || attStr.includes("no test");
-      const attendanceStatus = isAbsent ? "Absent" : "Present";
+      const hasAttendanceCol = colIndex.attendance >= 0;
+      const attStr = hasAttendanceCol ? getCellValue(row, colIndex.attendance).toLowerCase() : "";
+      const isAbsent = hasAttendanceCol && (attStr.includes("absent") || attStr.includes("rescheduled") || attStr.includes("no test"));
+      const attendanceStatus = hasAttendanceCol ? (isAbsent ? "Absent" : "Present") : undefined;
 
       // Percentage and absolute metrics extraction
       const mathsScore = parsePercent(getCellValue(row, colIndex.maths_pct));
@@ -347,8 +348,6 @@ export function parseSpreadsheetRowsToStudents(
           name,
           grade,
           center,
-          t1_attendance: "Absent",
-          t2_attendance: "Absent",
           t1_scores: {},
           t2_scores: {},
           retained: true
@@ -370,7 +369,9 @@ export function parseSpreadsheetRowsToStudents(
       stud.test_date = getCellValue(row, colIndex.test_date) || "25 May, 2026";
       stud.test_name = testName;
       stud.test_no = colIndex.test_no >= 0 ? getCellValue(row, colIndex.test_no) : "Test 1";
-      stud.attendance = getCellValue(row, colIndex.attendance) || (attendanceStatus === "Present" ? "Present" : "Absent");
+      if (hasAttendanceCol) {
+        stud.attendance = getCellValue(row, colIndex.attendance) || (attendanceStatus === "Present" ? "Present" : "Absent");
+      }
       stud.sst_pct = sstScore ?? physicsVal;
       stud.urdu_pct = urduScore ?? chemistryVal;
       stud.maths_pct = mathsScore ?? mathsVal;
@@ -397,9 +398,13 @@ export function parseSpreadsheetRowsToStudents(
       stud.test_count = testCount;
 
       if (testCount === 1) {
-        stud.t1_attendance = attendanceStatus;
-        stud.t2_attendance = "Absent";
-        if (attendanceStatus === "Present") {
+        if (colIndex.t1_attendance >= 0 && attendanceStatus !== undefined) {
+          stud.t1_attendance = attendanceStatus;
+        }
+        if (colIndex.t2_attendance >= 0 && attendanceStatus !== undefined) {
+          stud.t2_attendance = "Absent";
+        }
+        if (attendanceStatus === undefined || attendanceStatus === "Present") {
           stud.t1_scores = {};
           if (physicsVal !== undefined) stud.t1_scores.physics = physicsVal;
           if (chemistryVal !== undefined) stud.t1_scores.chemistry = chemistryVal;
@@ -411,8 +416,10 @@ export function parseSpreadsheetRowsToStudents(
         }
       } else {
         if (isT2) {
-          stud.t2_attendance = attendanceStatus;
-          if (attendanceStatus === "Present") {
+          if (colIndex.t2_attendance >= 0 && attendanceStatus !== undefined) {
+            stud.t2_attendance = attendanceStatus;
+          }
+          if (attendanceStatus === undefined || attendanceStatus === "Present") {
             stud.t2_scores = {};
             if (physicsVal !== undefined) stud.t2_scores.physics = physicsVal;
             if (chemistryVal !== undefined) stud.t2_scores.chemistry = chemistryVal;
@@ -421,8 +428,10 @@ export function parseSpreadsheetRowsToStudents(
             stud.t2_scores = {};
           }
         } else {
-          stud.t1_attendance = attendanceStatus;
-          if (attendanceStatus === "Present") {
+          if (colIndex.t1_attendance >= 0 && attendanceStatus !== undefined) {
+            stud.t1_attendance = attendanceStatus;
+          }
+          if (attendanceStatus === undefined || attendanceStatus === "Present") {
             stud.t1_scores = {};
             if (physicsVal !== undefined) stud.t1_scores.physics = physicsVal;
             if (chemistryVal !== undefined) stud.t1_scores.chemistry = chemistryVal;
@@ -744,3 +753,64 @@ export function generateCSVTemplateString(students: Student[]): string {
 
   return lines.join("\n");
 }
+
+export function parseDataAccessSpreadsheet(rows: any[][]): DataAccessRule[] {
+  if (!rows || rows.length < 2) {
+    throw new Error("Empty spreadsheet or sufficient header row missing.");
+  }
+
+  const rawHeaders = rows[0].map(h => String(h || "").trim());
+  const sanitizedHeaders = rawHeaders.map(sanitizeHeader);
+
+  // Region Combined_center Center Name CH Mail Id RAH Mail ID Regional Foundation Head Email Id Foundation Head Email Id Central
+  const colIndex = {
+    region: sanitizedHeaders.findIndex(h => h === "region" || h.includes("region")),
+    combined_center: sanitizedHeaders.findIndex(h => ["combinedcenter", "combined_center", "combined_centre", "combcenter"].includes(h) || h.includes("combined")),
+    center: sanitizedHeaders.findIndex(h => ["center", "centername", "branch", "centrename"].includes(h) || (h.includes("center") && !h.includes("combined"))),
+    ch_mailid: sanitizedHeaders.findIndex(h => ["chmailid", "chmail", "chemail", "chmail_id", "chemailid", "centerhead"].includes(h) || h.includes("chmail") || h.includes("chemail") || h.includes("centerhead")),
+    rah_mailid: sanitizedHeaders.findIndex(h => ["rahmailid", "rahmail", "rahemail", "rahmail_id", "rahemailid", "regionalacademic", "regionalacademichead"].includes(h) || h.includes("rahmail") || h.includes("rahemail") || h.includes("regionalac")),
+    rfh_mailid: sanitizedHeaders.findIndex(h => ["rfhmailid", "rfhmail", "rfhemail", "rfhmail_id", "rfhemailid", "regionalfoundationheademailid", "regionalfoundationhead"].includes(h) || h.includes("rfhmail") || h.includes("rfhemail") || h.includes("regionalfoundation")),
+    fh_mailid: sanitizedHeaders.findIndex(h => ["fhmailid", "fhmail", "fhemail", "fhmail_id", "fhemailid", "foundationheademailid", "foundationhead"].includes(h) || h.includes("fhmail") || h.includes("fhemail") || h.includes("foundationhead")),
+    central_mailid: sanitizedHeaders.findIndex(h => ["centralmailid", "centralmail", "centralemail", "centralmail_id", "centralemailid", "central"].includes(h) || h === "central" || h.includes("central"))
+  };
+
+  const getCellValue = (row: any[], index: number): string => {
+    if (index < 0 || index >= row.length) return "";
+    return String(row[index] || "").trim();
+  };
+
+  const rules: DataAccessRule[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    // Skip empty lines or spacer lines
+    if (!row || row.every(val => val === null || val === undefined || String(val).trim() === "")) {
+      continue;
+    }
+
+    const region = getCellValue(row, colIndex.region);
+    const combined_center = getCellValue(row, colIndex.combined_center);
+    const center = getCellValue(row, colIndex.center);
+    const ch_mailid = getCellValue(row, colIndex.ch_mailid).toLowerCase();
+    const rah_mailid = getCellValue(row, colIndex.rah_mailid).toLowerCase();
+    const rfh_mailid = getCellValue(row, colIndex.rfh_mailid).toLowerCase();
+    const fh_mailid = getCellValue(row, colIndex.fh_mailid).toLowerCase();
+    const central_mailid = getCellValue(row, colIndex.central_mailid).toLowerCase();
+
+    // Only save if at least region, combined_center, or center is populated
+    if (region || combined_center || center) {
+      rules.push({
+        region,
+        combined_center,
+        center,
+        ch_mailid,
+        rah_mailid,
+        rfh_mailid,
+        fh_mailid,
+        central_mailid
+      });
+    }
+  }
+
+  return rules;
+}
+
