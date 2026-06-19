@@ -28,8 +28,8 @@ export interface Student {
   science_pct?: number;
 
   // Attendance for the latest 2 test windows
-  t1_attendance?: "Present" | "Absent";
-  t2_attendance?: "Present" | "Absent";
+  t1_attendance?: string | number;
+  t2_attendance?: string | number;
   
   // Test 1 subject percentage scores (0 to 100)
   t1_scores: SubjectScores;
