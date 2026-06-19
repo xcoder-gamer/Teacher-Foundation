@@ -442,17 +442,19 @@ export default function App() {
 
   // Derived state: filtered students matching the current user's data access authorization rules
   const accessibleStudents = useMemo(() => {
-    // If there are no data access rules configured in the system: Anyone has access to everything.
+    // If the user is a global administrator, let them see everything immediately
+    if (isAdmin) {
+      return students;
+    }
+
+    // Otherwise, if there are no data access rules configured in the system: Anyone has access to everything.
     if (!dataAccessRules || dataAccessRules.length === 0) {
       return students;
     }
 
     const userEmail = googleUser?.email?.toLowerCase() || "";
     if (!userEmail) {
-      // If there are rules, but no user is logged in:
-      if (isAdmin) {
-        return students;
-      }
+      // If there are rules, but no user is logged in (simulated view-only mode in sandbox):
       return [];
     }
 
@@ -2338,7 +2340,7 @@ export default function App() {
                   }`}>
                     {isAdmin ? "Admin" : "Viewer"}
                   </span>
-                  {!isAdmin && (
+                  {!isAdmin && (googleUser?.email === "guest.viewer@pw.live") && (
                     <button
                       onClick={() => {
                         const nextVal = !bypassAdminGating;
@@ -2426,7 +2428,7 @@ export default function App() {
         )}
         
         {/* GOOGLE SHEETS RIBBON CARDS */}
-        {true && (
+        {isSuperUser && (
           <section className={`lg:col-span-12 bg-slate-900 border rounded-xl p-5 shadow-2xl relative overflow-hidden transition-all duration-300 ${
             hasImportedData ? "border-emerald-500/40 bg-slate-900/90" : "border-slate-800"
           }`} id="google-sheets-widget">
